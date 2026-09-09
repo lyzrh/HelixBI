@@ -9,6 +9,8 @@
 
 [快速开始](#快速开始) · [核心特性](#核心特性) · [架构](#架构) · [技术栈](#技术栈) · [Roadmap](#roadmap)
 
+**简体中文** · [English](README.en.md)
+
 </div>
 
 ---
@@ -96,8 +98,8 @@
 ### 1. 后端
 
 ```bash
-git clone https://github.com/<你的用户名>/helix-bi.git
-cd helix-bi
+git clone https://github.com/lyzrh/HelixBI.git
+cd HelixBI
 
 python -m venv .venv
 .venv\Scripts\pip install -r requirements.txt    # Linux/macOS: source .venv/bin/activate
