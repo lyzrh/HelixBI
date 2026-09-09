@@ -1,0 +1,64 @@
+pack: manufacturing_production
+name: 生产制造
+domain_hints: |
+  生产制造域数据。常见分析口径：
+  - 产量按生产日期统计；数量单位为件
+  - 良率 = (实际产量 - 不良数) / 实际产量 × 100%，单位 %
+  - 达成率 = 实际产量 / 计划产量 × 100%，单位 %
+  - OEE 近似 = 时间稼动率 × 性能稼动率 × 良品率；若数据只有停机时长，用 (计划工时-停机时长)/计划工时 作时间稼动率
+  - 不良率 = 不良数 / 实际产量 × 100%
+  - 同比 = 与去年同期比；环比 = 与上一周期比；均按所选时间粒度对齐后计算
+metrics:
+  - name: 计划产量
+    field: 计划产量
+    agg: sum
+    unit: 件
+    synonyms: [计划产量, 计划数, 目标产量]
+  - name: 实际产量
+    field: 实际产量
+    agg: sum
+    unit: 件
+    synonyms: [实际产量, 产出, 产量, 完成数]
+  - name: 不良数
+    field: 不良数
+    agg: sum
+    unit: 件
+    synonyms: [不良数, 次品数, 缺陷数]
+  - name: 良率
+    formula: (实际产量合计 - 不良数合计) / 实际产量合计 × 100
+    unit: "%"
+    synonyms: [良率, 良品率, 合格率]
+    note: 派生指标，先分别 sum 再计算，禁止对行级比值求均值
+  - name: 达成率
+    formula: 实际产量合计 / 计划产量合计 × 100
+    unit: "%"
+    synonyms: [达成率, 完成率, 计划达成]
+    note: 派生指标，先分别 sum 再计算
+  - name: 停机时长
+    field: 停机分钟
+    agg: sum
+    unit: 分钟
+    synonyms: [停机时长, 停机时间, 停机]
+    optional: true
+dimensions:
+  - name: 产线
+    field: 产线
+    synonyms: [产线, 生产线, 线体]
+  - name: 产品
+    field: 产品
+    synonyms: [产品, 产品型号, 料号, 品名]
+  - name: 工序
+    field: 工序
+    synonyms: [工序, 工站, 制程]
+    optional: true
+time_field: 生产日期
+time_grain: day
+chart_hints:
+  单指标多维度: bar
+  趋势: line
+  达成/良率对比: bar
+example_questions:
+  - 各产线的实际产量是多少？达成率如何？
+  - 近30天良率趋势，计算环比
+  - 哪个产品的不良数最多？不良率是多少？
+  - 停机时长最长的产线是哪条？

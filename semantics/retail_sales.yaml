@@ -1,0 +1,56 @@
+pack: retail_sales
+name: 零售销售
+domain_hints: |
+  零售销售域数据。常见分析口径：
+  - 销售额按下单日期统计；金额单位为元
+  - 客单价 = 销售额合计 / 数量合计（不要对单价直接求均值）
+  - 同比 = 与去年同期比；环比 = 与上一周期比；均按所选时间粒度对齐后计算
+  - TopN 排名默认按销售额降序
+metrics:
+  - name: 销售额
+    field: 销售额
+    agg: sum
+    unit: 元
+    synonyms: [销售额, 销售金额, GMV, 营业额, 金额]
+  - name: 销量
+    field: 数量
+    agg: sum
+    unit: 件
+    synonyms: [销量, 销售数量, 数量, 件数]
+  - name: 客单价
+    formula: 销售额合计 / 销量合计
+    unit: 元/件
+    synonyms: [客单价, 平均单价, 件单价]
+    note: 派生指标，先分别 sum 再相除，禁止对行级比值求均值
+  - name: 订单数
+    field: 订单编号
+    agg: count_distinct
+    unit: 单
+    synonyms: [订单数, 订单量, 交易数]
+    optional: true
+dimensions:
+  - name: 品类
+    field: 品类
+    synonyms: [品类, 产品类别, 类目, 品类名称]
+  - name: 区域
+    field: 区域
+    synonyms: [区域, 大区, 销售区域]
+  - name: 门店
+    field: 门店
+    synonyms: [门店, 店铺, 门店名称]
+    optional: true
+  - name: 渠道
+    field: 渠道
+    synonyms: [渠道, 销售渠道]
+    optional: true
+time_field: 订单日期
+time_grain: day
+chart_hints:
+  单指标多维度: bar
+  趋势: line
+  占比: pie
+example_questions:
+  - 各品类的总销售额是多少？按从高到低排序
+  - 近90天销售额的周趋势如何？计算环比
+  - 哪个区域的客单价最高？
+  - 销售额 Top 10 的商品是哪些？

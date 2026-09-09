@@ -1,0 +1,29 @@
+# 敏感配置（API Key）
+.env
+
+# Python
+.venv/
+__pycache__/
+*.pyc
+
+# 运行期数据与用户数据（含个人资料、会话记录）
+runs/
+uploads/
+data/
+history.db
+*.db
+*.sqlite
+
+# 前端
+frontend/node_modules/
+frontend/dist/
+
+# 依赖集中管理目录
+dependencies/
+
+# IDE / 工具内部文件
+.trae/
+.streamlit/
+
+# 第三方产品参考截图（版权原因不公开）
+docs/ui-reference/

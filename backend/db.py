@@ -1,0 +1,58 @@
+"""SQLite 元数据库引擎（WAL + StaticPool）与 FastAPI 依赖。"""
+
+from typing import Iterator
+
+from sqlalchemy import create_engine, event
+from sqlalchemy.orm import Session, sessionmaker
+from sqlalchemy.pool import StaticPool
+
+from backend.config import DB_PATH
+from backend.models import Base
+
+engine = create_engine(
+    f"sqlite:///{DB_PATH}",
+    connect_args={"check_same_thread": False, "timeout": 30},
+    poolclass=StaticPool,
+)
+
+
+@event.listens_for(engine, "connect")
+def _set_sqlite_pragma(dbapi_conn, _record):
+    cursor = dbapi_conn.cursor()
+    cursor.execute("PRAGMA journal_mode=WAL")
+    cursor.execute("PRAGMA foreign_keys=ON")
+    cursor.close()
+
+
+SessionLocal = sessionmaker(bind=engine, autoflush=False, expire_on_commit=False)
+
+
+def get_db() -> Iterator[Session]:
+    db = SessionLocal()
+    try:
+        yield db
+        db.commit()
+    except Exception:
+        db.rollback()
+        raise
+    finally:
+        db.close()
+
+
+def init_db() -> None:
+    import backend.seed as seed
+
+    Base.metadata.create_all(engine)
+    _migrate()
+    with SessionLocal() as db:
+        seed.run(db)
+
+
+def _migrate() -> None:
+    """轻量列迁移：create_all 不会给已存在的表补新列。"""
+    with engine.connect() as conn:
+        cols = {row[1] for row in conn.exec_driver_sql("PRAGMA table_info(dashboard_items)")}
+        if "span" not in cols:
+            conn.exec_driver_sql(
+                "ALTER TABLE dashboard_items ADD COLUMN span INTEGER NOT NULL DEFAULT 12")
+            conn.commit()
