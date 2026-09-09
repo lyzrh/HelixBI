@@ -10,7 +10,11 @@ Skills, Insights, and Dashboards — **the system gets smarter with every use**.
 
 [Getting Started](#getting-started) · [Core Features](#core-features) · [Architecture](#architecture) · [Tech Stack](#tech-stack) · [Roadmap](#roadmap)
 
+<<<<<<< HEAD
 [简体中文](README.zh-CN.md) · **English**
+=======
+[简体中文](README.md) · **English**
+>>>>>>> 2626b64fe3aa3930bae39c8aaa4e51bef7e6b2cb
 
 </div>
 
@@ -99,7 +103,7 @@ can always connect your own data.
 
 - Python 3.11+
 - Node.js 18+ (only needed for frontend development; production mode serves the built assets from the backend)
-- Docker Desktop (required for sandbox execution; when offline, analysis / Skill replay are unavailable, everything else works)
+- Docker (Desktop on Windows/macOS, Engine on Linux) — required for sandbox execution; when offline, analysis / Skill replay are unavailable, everything else works
 
 ### 1. Backend
 
@@ -108,9 +112,22 @@ git clone https://github.com/lyzrh/HelixBI.git
 cd HelixBI
 
 python -m venv .venv
-.venv\Scripts\pip install -r requirements.txt    # Linux/macOS: source .venv/bin/activate
-copy .env.example .env                           # fill in OPENAI_BASE_URL / OPENAI_API_KEY / MODEL_NAME
 ```
+
+Install dependencies and create `.env`:
+
+```bash
+# Windows (CMD / PowerShell)
+.venv\Scripts\pip install -r requirements.txt
+copy .env.example .env
+
+# Linux / macOS
+source .venv/bin/activate
+pip install -r requirements.txt
+cp .env.example .env
+```
+
+Edit `.env` and fill in `OPENAI_BASE_URL` / `OPENAI_API_KEY` / `MODEL_NAME`.
 
 `.env` supports any OpenAI-compatible endpoint (DeepSeek / Zhipu GLM / Qwen / local
 vLLM…). You can also configure it at runtime in the Settings Center (top-right corner) —
@@ -125,7 +142,7 @@ MODEL_NAME=deepseek-chat
 ### 2. Sandbox image
 
 ```bash
-# With Docker Desktop running; if Docker Hub is unreachable, pull from a mirror first
+# With Docker running; if Docker Hub is unreachable, pull the base image from a mirror first
 docker pull docker.m.daocloud.io/library/python:3.11-slim
 docker tag docker.m.daocloud.io/library/python:3.11-slim python:3.11-slim
 docker build -t helix-sandbox:latest sandbox/
@@ -134,7 +151,11 @@ docker build -t helix-sandbox:latest sandbox/
 ### 3. Run
 
 ```bash
+# Windows (CMD / PowerShell)
 .venv\Scripts\python -m uvicorn backend.main:app --port 8000
+
+# Linux / macOS (venv activated)
+python -m uvicorn backend.main:app --port 8000
 ```
 
 Open <http://127.0.0.1:8000> and you're ready to go (sample datasources / scenario

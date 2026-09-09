@@ -9,7 +9,11 @@
 
 [快速开始](#快速开始) · [核心特性](#核心特性) · [架构](#架构) · [技术栈](#技术栈) · [Roadmap](#roadmap)
 
+<<<<<<< HEAD
 **简体中文** · [English](README.md)
+=======
+**简体中文** · [English](README.en.md)
+>>>>>>> 2626b64fe3aa3930bae39c8aaa4e51bef7e6b2cb
 
 </div>
 
@@ -93,7 +97,7 @@
 
 - Python 3.11+
 - Node.js 18+（仅开发前端需要；生产模式用后端托管的构建产物）
-- Docker Desktop（沙箱执行需要；离线时分析/Skill 重放不可用，其余页面正常）
+- Docker（Windows/macOS 装 Desktop，Linux 用 Docker Engine）——沙箱执行需要；离线时分析/Skill 重放不可用，其余页面正常
 
 ### 1. 后端
 
@@ -102,9 +106,22 @@ git clone https://github.com/lyzrh/HelixBI.git
 cd HelixBI
 
 python -m venv .venv
-.venv\Scripts\pip install -r requirements.txt    # Linux/macOS: source .venv/bin/activate
-copy .env.example .env                           # 填 OPENAI_BASE_URL / OPENAI_API_KEY / MODEL_NAME
 ```
+
+安装依赖并创建 `.env`：
+
+```bash
+# Windows（CMD / PowerShell）
+.venv\Scripts\pip install -r requirements.txt
+copy .env.example .env
+
+# Linux / macOS
+source .venv/bin/activate
+pip install -r requirements.txt
+cp .env.example .env
+```
+
+编辑 `.env`，填入 `OPENAI_BASE_URL` / `OPENAI_API_KEY` / `MODEL_NAME`。
 
 `.env` 支持任何 OpenAI 兼容接口（DeepSeek / 智谱 GLM / 通义千问 / 本地 vLLM…），也可以启动后在页面右上角「设置中心」里在线配置（保存即生效，无需重启）：
 
@@ -117,7 +134,7 @@ MODEL_NAME=deepseek-chat
 ### 2. 沙箱镜像
 
 ```bash
-# Docker Desktop 运行中；Hub 不可直连时可先从镜像源拉
+# Docker 运行中；Hub 不可直连时可先从镜像源拉基础镜像
 docker pull docker.m.daocloud.io/library/python:3.11-slim
 docker tag docker.m.daocloud.io/library/python:3.11-slim python:3.11-slim
 docker build -t helix-sandbox:latest sandbox/
@@ -126,7 +143,11 @@ docker build -t helix-sandbox:latest sandbox/
 ### 3. 启动
 
 ```bash
+# Windows（CMD / PowerShell）
 .venv\Scripts\python -m uvicorn backend.main:app --port 8000
+
+# Linux / macOS（venv 已激活）
+python -m uvicorn backend.main:app --port 8000
 ```
 
 打开 <http://127.0.0.1:8000> 即可使用（内置示例数据源 / 场景 Agent / Skill）。
