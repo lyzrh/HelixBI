@@ -10,7 +10,6 @@ __pycache__/
 runs/
 uploads/
 data/
-history.db
 *.db
 *.sqlite
 
@@ -23,7 +22,6 @@ dependencies/
 
 # IDE / 工具内部文件
 .trae/
-.streamlit/
 
 # 第三方产品参考截图（版权原因不公开）
 docs/ui-reference/

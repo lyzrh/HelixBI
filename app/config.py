@@ -15,7 +15,7 @@ MODEL_NAME = os.getenv("MODEL_NAME", "gpt-4o-mini")
 # 回答创意度（设置页可改，运行时热更新；默认 0 保证代码生成稳定）
 LLM_TEMPERATURE = 0.0
 
-SANDBOX_IMAGE = os.getenv("SANDBOX_IMAGE", "daa-sandbox:latest")
+SANDBOX_IMAGE = os.getenv("SANDBOX_IMAGE", "helix-sandbox:latest")
 MAX_FIX_ATTEMPTS = int(os.getenv("MAX_FIX_ATTEMPTS", "3"))
 SANDBOX_CPUS = float(os.getenv("SANDBOX_CPUS", "2"))
 SANDBOX_MEMORY = os.getenv("SANDBOX_MEMORY", "2g")

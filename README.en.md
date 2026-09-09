@@ -128,7 +128,7 @@ MODEL_NAME=deepseek-chat
 # With Docker Desktop running; if Docker Hub is unreachable, pull from a mirror first
 docker pull docker.m.daocloud.io/library/python:3.11-slim
 docker tag docker.m.daocloud.io/library/python:3.11-slim python:3.11-slim
-docker build -t daa-sandbox:latest sandbox/
+docker build -t helix-sandbox:latest sandbox/
 ```
 
 ### 3. Run
@@ -139,6 +139,10 @@ docker build -t daa-sandbox:latest sandbox/
 
 Open <http://127.0.0.1:8000> and you're ready to go (sample datasources / scenario
 agents / skills are preloaded).
+
+The built-in sample data is generated demo data: retail sales covering ~6 months and
+manufacturing ~3 months, both ending recently — "last 30 / 90 days" questions work
+out of the box.
 
 Frontend dev mode:
 
@@ -161,13 +165,13 @@ backend/                # FastAPI service
                         # insight_scheduler datasource report_export
 semantics/              # industry semantic packs (retail_sales / manufacturing_production yaml)
 app/                    # LangGraph core
-  graph.py profiler.py sandbox.py prompts.py
+  graph.py profiler.py sandbox.py prompts.py report.py semantic.py
 sandbox/                # sandbox image (pandas/pyarrow/matplotlib/CJK fonts + dahelper)
 frontend/               # React + AntD + Zustand + Vite
   src/pages/            # Chat Workbench Explore Agents Skills Insights
                         # Dashboards Datasources Usage
   src/stores/           # chatStore (SSE state machine) appStore
-examples/               # sample data (retail / manufacturing CSV)
+examples/               # sample data (retail / manufacturing CSV, generated demo data)
 screenshots/            # README screenshots
 uploads/ data/ runs/    # runtime directories (gitignored)
 ```

@@ -120,7 +120,7 @@ MODEL_NAME=deepseek-chat
 # Docker Desktop 运行中；Hub 不可直连时可先从镜像源拉
 docker pull docker.m.daocloud.io/library/python:3.11-slim
 docker tag docker.m.daocloud.io/library/python:3.11-slim python:3.11-slim
-docker build -t daa-sandbox:latest sandbox/
+docker build -t helix-sandbox:latest sandbox/
 ```
 
 ### 3. 启动
@@ -130,6 +130,9 @@ docker build -t daa-sandbox:latest sandbox/
 ```
 
 打开 <http://127.0.0.1:8000> 即可使用（内置示例数据源 / 场景 Agent / Skill）。
+
+内置示例数据为演示用生成数据：零售销售约 6 个月、生产制造约 3 个月，均截止到近期，
+开箱即可直接问「近30天 / 近90天」类问题。
 
 前端开发模式：
 
@@ -152,13 +155,13 @@ backend/                # FastAPI 服务
                         # insight_scheduler datasource report_export
 semantics/              # 行业语义包（retail_sales / manufacturing_production yaml）
 app/                    # LangGraph 内核
-  graph.py profiler.py sandbox.py prompts.py
+  graph.py profiler.py sandbox.py prompts.py report.py semantic.py
 sandbox/                # 沙箱镜像（pandas/pyarrow/matplotlib/中文字体 + dahelper）
 frontend/               # React + AntD + Zustand + Vite
   src/pages/            # Chat Workbench Explore Agents Skills Insights
                         # Dashboards Datasources Usage
   src/stores/           # chatStore（SSE 状态机） appStore
-examples/               # 示例数据（零售 / 生产 CSV）
+examples/               # 示例数据（零售 / 生产 CSV，演示用生成数据）
 screenshots/            # README 截图
 uploads/ data/ runs/    # 运行期目录（gitignore）
 ```
