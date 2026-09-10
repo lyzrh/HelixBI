@@ -1,0 +1,11 @@
+<svg width="240" height="96" viewBox="0 0 240 96" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <rect x="4" y="4" width="88" height="88" rx="20" fill="#0A1530"/>
+  <path d="M26 16C49 24 49 40 26 48C11 53 10 61 21 66" stroke="#8B77E8" stroke-width="5" stroke-linecap="round"/>
+  <path d="M50 64C27 56 27 40 50 32C65 27 66 19 55 14" stroke="#4FC3BC" stroke-width="5" stroke-linecap="round"/>
+  <circle cx="26" cy="16" r="4" fill="#F5D75E"/>
+  <circle cx="55" cy="14" r="4" fill="#FFFFFF"/>
+  <circle cx="50" cy="64" r="4" fill="#F5D75E"/>
+  <circle cx="21" cy="66" r="4" fill="#FFFFFF"/>
+  <text x="112" y="44" font-family="-apple-system,Segoe UI,PingFang SC,Microsoft YaHei,sans-serif" font-size="34" font-weight="700" fill="#1A1A1A">绎数</text>
+  <text x="112" y="72" font-family="Inter,Segoe UI,sans-serif" font-size="17" font-weight="600" letter-spacing="3" fill="#5645D4">HELIX BI</text>
+</svg>

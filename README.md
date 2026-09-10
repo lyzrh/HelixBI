@@ -1,5 +1,7 @@
 <div align="center">
 
+<img src="docs/logo.svg" alt="Helix BI" width="240"/>
+
 # Helix BI
 
 **Conversational AgentBI for Manufacturing & Retail**
@@ -10,11 +12,7 @@ Skills, Insights, and Dashboards — **the system gets smarter with every use**.
 
 [Getting Started](#getting-started) · [Core Features](#core-features) · [Architecture](#architecture) · [Tech Stack](#tech-stack) · [Roadmap](#roadmap)
 
-<<<<<<< HEAD
 [简体中文](README.zh-CN.md) · **English**
-=======
-[简体中文](README.md) · **English**
->>>>>>> 2626b64fe3aa3930bae39c8aaa4e51bef7e6b2cb
 
 </div>
 
@@ -215,6 +213,7 @@ uploads/ data/ runs/    # runtime directories (gitignored)
 - **Asset accumulation**: a successful analysis becomes a Skill (instant replay); a valuable finding gets pinned to a dashboard — the system grows stronger with use instead of starting from scratch every time
 - **Proactive, not passive**: scheduled insight scans surface anomalies before the user even asks
 - **Token discipline**: Skill replay skips the LLM entirely; self-service analytics and SQL queries are fully local; follow-up suggestions can be turned off; connection tests send only a max_tokens=1 probe
+- **Brand identity**: the "Yizi" purple design system (primary `#5645D4` + deep navy `#0A1530`) with a double-helix logo — the purple strand stands for business data, the teal strand for analytical intelligence, and the nodes for accumulated analysis assets
 
 Inspired by the product shape of FineBI NEXT, and by the practices of open-source
 projects such as DB-GPT / PandasAI / Vanna / OpenCodeInterpreter in code-interpreter
