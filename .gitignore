@@ -23,5 +23,10 @@ dependencies/
 # IDE / 工具内部文件
 .trae/
 
+# AI 助手个人本地配置与记忆（不公开）
+CLAUDE.local.md
+.claude/settings.local.json
+.workbuddy/
+
 # 第三方产品参考截图（版权原因不公开）
 docs/ui-reference/

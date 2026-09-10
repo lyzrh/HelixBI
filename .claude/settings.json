@@ -1,0 +1,23 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(python -m uvicorn backend.main:app:*)",
+      "Bash(python -m pip install:*)",
+      "Bash(cd frontend && npm run dev)",
+      "Bash(cd frontend && npm run build)",
+      "Bash(npm install:*)",
+      "Bash(docker build:*)",
+      "Bash(docker pull:*)",
+      "Bash(git status)",
+      "Bash(git diff:*)",
+      "Bash(git log:*)",
+      "Read(*)"
+    ],
+    "deny": [
+      "Read(.env)",
+      "Read(**/.env)",
+      "Read(**/*.db)",
+      "Bash(docker run:*)"
+    ]
+  }
+}

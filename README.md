@@ -192,6 +192,9 @@ frontend/               # React + AntD + Zustand + Vite
   src/stores/           # chatStore (SSE state machine) appStore
 examples/               # sample data (retail / manufacturing CSV, generated demo data)
 screenshots/            # README screenshots
+AGENTS.md               # universal AI-assistant rules (AGENTS standard)
+.agents/                # agent collaboration docs: rules/ (on-demand) + plans/ (design decisions)
+.claude/                # Claude Code config: settings + slash commands + subagents
 uploads/ data/ runs/    # runtime directories (gitignored)
 ```
 

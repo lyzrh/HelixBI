@@ -182,6 +182,9 @@ frontend/               # React + AntD + Zustand + Vite
   src/stores/           # chatStore（SSE 状态机） appStore
 examples/               # 示例数据（零售 / 生产 CSV，演示用生成数据）
 screenshots/            # README 截图
+AGENTS.md               # AI 编程助手通用规则（AGENTS 标准）
+.agents/                # Agent 协作文档：rules/（按需规则）+ plans/（设计决策）
+.claude/                # Claude Code 配置：settings + 斜杠命令 + 子代理
 uploads/ data/ runs/    # 运行期目录（gitignore）
 ```
 
