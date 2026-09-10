@@ -4,7 +4,7 @@ html, body, #root { height: 100%; }
 
 body {
   font-family: -apple-system, "Segoe UI", "Microsoft YaHei", sans-serif;
-  background: #f5f7fa;
+  background: #F6F5F4;
 }
 
 /* 消息流滚动条 */
@@ -32,16 +32,16 @@ body {
 /* 追问胶囊 */
 .followup-pill {
   display: inline-flex; align-items: center; gap: 4px;
-  border: 1px solid #bfdbfe; background: #eff6ff; color: #1d4ed8;
+  border: 1px solid #C9BBEE; background: #ECE7F8; color: #4534B3;
   border-radius: 999px; padding: 4px 14px; font-size: 13px; cursor: pointer;
   transition: all .15s;
 }
-.followup-pill:hover { background: #dbeafe; border-color: #93c5fd; }
+.followup-pill:hover { background: #DCD2F5; border-color: #A18BE8; }
 
 /* 用户消息气泡 */
 .user-bubble {
   max-width: 72%;
-  background: linear-gradient(135deg,#2563eb,#3b82f6);
+  background: linear-gradient(135deg,#5645D4,#7B5CF5);
   color: #fff;
   padding: 9px 14px;
   border-radius: 12px 12px 2px 12px;
@@ -61,7 +61,7 @@ body {
 /* 思考中动画 */
 .thinking { display: inline-flex; gap: 5px; padding: 8px 0; }
 .thinking .dot {
-  width: 7px; height: 7px; border-radius: 50%; background: #93c5fd;
+  width: 7px; height: 7px; border-radius: 50%; background: #A18BE8;
   animation: blink 1.2s infinite ease-in-out;
 }
 .thinking .dot:nth-child(2) { animation-delay: .2s; }
@@ -77,7 +77,7 @@ body {
   cursor: pointer; transition: background .12s;
 }
 .session-item:hover { background: #f1f5f9; }
-.session-item.active { background: #eff6ff; box-shadow: inset 2px 0 0 #2563eb; }
+.session-item.active { background: #ECE7F8; box-shadow: inset 2px 0 0 #5645D4; }
 
 /* 快捷胶囊（工作台/Agent） */
 .quick-pill {
@@ -86,4 +86,4 @@ body {
   border-radius: 10px; padding: 10px 16px; font-size: 13.5px; cursor: pointer;
   transition: all .15s; box-shadow: 0 1px 2px rgba(15,23,42,.04);
 }
-.quick-pill:hover { border-color: #93c5fd; color: #1d4ed8; background: #f8FAFF; }
+.quick-pill:hover { border-color: #A18BE8; color: #4534B3; background: #FAF9FE; }

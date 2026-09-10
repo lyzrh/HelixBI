@@ -265,15 +265,15 @@ export function Datasources() {
   // 品牌化图标（FineBI 连接市场风格：每个类型独立配色）
   const dsIconMeta = (ds: DataSourceInfo): { icon: React.ReactNode; color: string; bg: string } => {
     if (ds.type === 'file') {
-      return { icon: <FileTextOutlined />, color: '#2563eb', bg: 'linear-gradient(135deg,#eff6ff,#dbeafe)' };
+      return { icon: <FileTextOutlined />, color: '#5645D4', bg: 'linear-gradient(135deg,#ECE7F8,#DCD2F5)' };
     }
     if (ds.db_type === 'mysql') {
       return { icon: <CloudServerOutlined />, color: '#0284c7', bg: 'linear-gradient(135deg,#f0f9ff,#e0f2fe)' };
     }
     if (ds.db_type === 'postgresql') {
-      return { icon: <DatabaseOutlined />, color: '#0d9488', bg: 'linear-gradient(135deg,#f0fdfa,#ccfbf1)' };
+      return { icon: <DatabaseOutlined />, color: '#2A9D99', bg: 'linear-gradient(135deg,#f0fdfa,#ccfbf1)' };
     }
-    return { icon: <DatabaseOutlined />, color: '#7c3aed', bg: 'linear-gradient(135deg,#f5f3ff,#ede9fe)' };
+    return { icon: <DatabaseOutlined />, color: '#7B5CF5', bg: 'linear-gradient(135deg,#f5f3ff,#ede9fe)' };
   };
 
   // 状态行（小圆点 + 文案，FineBI 风格）
@@ -310,8 +310,8 @@ export function Datasources() {
 
   const marketCards = [
     {
-      key: 'csv', icon: <FileTextOutlined style={{ fontSize: 28, color: '#2563eb' }} />,
-      color: '#2563eb', bg: 'linear-gradient(135deg,#eff6ff,#dbeafe)',
+      key: 'csv', icon: <FileTextOutlined style={{ fontSize: 28, color: '#5645D4' }} />,
+      color: '#5645D4', bg: 'linear-gradient(135deg,#ECE7F8,#DCD2F5)',
       title: '上传数据文件', desc: 'CSV / Excel / Parquet，自动识别字段与语义包',
       action: (
         <Upload accept=".csv,.xlsx,.xls,.parquet" showUploadList={false} customRequest={doUpload}>
@@ -326,14 +326,14 @@ export function Datasources() {
       action: <Button block icon={<ApiOutlined />} onClick={() => openDbModal('mysql')}>去连接</Button>,
     },
     {
-      key: 'postgresql', icon: <DatabaseOutlined style={{ fontSize: 28, color: '#0d9488' }} />,
-      color: '#0d9488', bg: 'linear-gradient(135deg,#f0fdfa,#ccfbf1)',
+      key: 'postgresql', icon: <DatabaseOutlined style={{ fontSize: 28, color: '#2A9D99' }} />,
+      color: '#2A9D99', bg: 'linear-gradient(135deg,#f0fdfa,#ccfbf1)',
       title: 'PostgreSQL', desc: '连接 PostgreSQL 数据库，物化后进入沙箱分析',
       action: <Button block icon={<ApiOutlined />} onClick={() => openDbModal('postgresql')}>去连接</Button>,
     },
     {
-      key: 'sqlite', icon: <DatabaseOutlined style={{ fontSize: 28, color: '#7c3aed' }} />,
-      color: '#7c3aed', bg: 'linear-gradient(135deg,#f5f3ff,#ede9fe)',
+      key: 'sqlite', icon: <DatabaseOutlined style={{ fontSize: 28, color: '#7B5CF5' }} />,
+      color: '#7B5CF5', bg: 'linear-gradient(135deg,#f5f3ff,#ede9fe)',
       title: 'SQLite', desc: '本地 SQLite 文件，零配置直连',
       action: <Button block icon={<ApiOutlined />} onClick={() => openDbModal('sqlite')}>去连接</Button>,
     },
@@ -684,7 +684,7 @@ export function Datasources() {
 function SectionTitle({ title, style }: { title: string; style?: React.CSSProperties }) {
   return (
     <div style={{ fontSize: 14.5, fontWeight: 600, margin: '0 0 12px', display: 'flex', alignItems: 'center', gap: 8, ...style }}>
-      <span style={{ width: 3, height: 14, borderRadius: 2, background: 'linear-gradient(#2563eb,#7c3aed)', display: 'inline-block' }} />
+      <span style={{ width: 3, height: 14, borderRadius: 2, background: 'linear-gradient(#5645D4,#7B5CF5)', display: 'inline-block' }} />
       {title}
     </div>
   );

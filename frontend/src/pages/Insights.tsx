@@ -25,7 +25,7 @@ const RULE_LABELS: Record<string, string> = {
 const SEVERITY: Record<string, { color: string; label: string; bg: string; border: string }> = {
   critical: { color: '#dc2626', label: '严重', bg: '#fef2f2', border: '#fecaca' },
   warning: { color: '#ea580c', label: '警告', bg: '#fff7ed', border: '#fed7aa' },
-  info: { color: '#2563eb', label: '提示', bg: '#eff6ff', border: '#bfdbfe' },
+  info: { color: '#5645D4', label: '提示', bg: '#ECE7F8', border: '#C9BBEE' },
 };
 
 const STATUS_TAB = [
@@ -256,7 +256,7 @@ export function Insights() {
           placement="bottomRight"
           title={(
             <span style={{ fontSize: 13.5 }}>
-              <ClockCircleOutlined style={{ marginRight: 6, color: '#2563eb' }} />
+              <ClockCircleOutlined style={{ marginRight: 6, color: '#5645D4' }} />
               定时扫描
             </span>
           )}
@@ -307,7 +307,7 @@ export function Insights() {
         >
           <Tooltip title="定时扫描设置">
             <Button icon={<ClockCircleOutlined />}
-              style={schedule?.enabled ? { borderColor: '#2563eb', color: '#2563eb' } : undefined}>
+              style={schedule?.enabled ? { borderColor: '#5645D4', color: '#5645D4' } : undefined}>
               {schedule?.enabled ? `定时·${intervalLabel(schedule?.interval_minutes ?? 60)}` : '定时扫描'}
             </Button>
           </Tooltip>
@@ -319,7 +319,7 @@ export function Insights() {
         <div style={{ ...overviewCardStyle, flex: '1 1 220px' }}>
           <div style={{
             width: 44, height: 44, borderRadius: 12,
-            background: 'linear-gradient(135deg,#3b82f6,#6366f1)', color: '#fff',
+            background: 'linear-gradient(135deg,#7B5CF5,#7B5CF5)', color: '#fff',
             display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 21,
           }}><SoundOutlined /></div>
           <div>
@@ -334,11 +334,11 @@ export function Insights() {
           <Progress
             type="circle" size={58}
             percent={insights.length ? Math.round((counts.new / insights.length) * 100) : 0}
-            strokeColor="#2563eb" format={() => `${counts.new}`}
+            strokeColor="#5645D4" format={() => `${counts.new}`}
           />
           <div>
             <div style={{ fontSize: 12.5, color: '#64748b' }}>待处理（新发现）</div>
-            <div style={{ fontSize: 13, color: '#2563eb', fontWeight: 600 }}>
+            <div style={{ fontSize: 13, color: '#5645D4', fontWeight: 600 }}>
               {insights.length ? `${Math.round((counts.new / insights.length) * 100)}%` : '-'}
             </div>
           </div>
@@ -383,7 +383,7 @@ export function Insights() {
               <span>
                 {t.label}
                 {t.key && counts[t.key] > 0 && (
-                  <span style={{ marginLeft: 6, fontSize: 11, background: t.key === 'new' ? '#2563eb' : '#94a3b8', color: '#fff', borderRadius: 8, padding: '0 6px' }}>
+                  <span style={{ marginLeft: 6, fontSize: 11, background: t.key === 'new' ? '#5645D4' : '#94a3b8', color: '#fff', borderRadius: 8, padding: '0 6px' }}>
                     {counts[t.key]}
                   </span>
                 )}
@@ -467,7 +467,7 @@ export function Insights() {
             </pre>
 
             <div style={{ margin: '16px 0 8px', display: 'flex', alignItems: 'center', gap: 8 }}>
-              <BulbOutlined style={{ color: '#7c3aed' }} />
+              <BulbOutlined style={{ color: '#7B5CF5' }} />
               <span style={{ fontSize: 13.5, fontWeight: 600 }}>LLM 经营诊断</span>
               {!detail.report && (
                 <Tooltip title="调用大模型：现象 → 数据证据 → 可能原因 → 建议动作">

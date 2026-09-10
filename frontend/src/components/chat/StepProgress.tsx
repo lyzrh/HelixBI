@@ -9,7 +9,7 @@ export function StepProgress({ steps }: { steps: StreamingState['steps'] }) {
       {steps.map((s) => (
         <div key={s.node} style={{
           display: 'flex', alignItems: 'center', gap: 8, fontSize: 13,
-          color: s.status === 'done' ? '#16a34a' : s.status === 'error' ? '#dc2626' : '#2563eb',
+          color: s.status === 'done' ? '#16a34a' : s.status === 'error' ? '#dc2626' : '#5645D4',
         }}>
           {s.status === 'running' && <LoadingOutlined spin />}
           {s.status === 'done' && <CheckCircleFilled />}

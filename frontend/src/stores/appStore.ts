@@ -23,7 +23,7 @@ interface AppState {
   loadProfile: () => Promise<void>;
 }
 
-const DEFAULT_PROFILE: UserProfile = { nickname: '数据探索者', role: '数据分析师', avatar_color: '#2563eb' };
+const DEFAULT_PROFILE: UserProfile = { nickname: '数据探索者', role: '数据分析师', avatar_color: '#5645D4' };
 
 export const useAppStore = create<AppState>((set) => ({
   health: null,

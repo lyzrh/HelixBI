@@ -23,7 +23,7 @@ const ICONS: Record<string, React.ReactNode> = {
   chart: <LineChartOutlined />,
 };
 
-const PRESET_COLORS = ['#2563eb', '#16a34a', '#7c3aed', '#ea580c', '#0d9488', '#dc2626'];
+const PRESET_COLORS = ['#5645D4', '#16a34a', '#7B5CF5', '#ea580c', '#2A9D99', '#dc2626'];
 
 interface AgentForm {
   name: string; description: string; pack_id: string;
@@ -33,7 +33,7 @@ interface AgentForm {
 
 const emptyForm: AgentForm = {
   name: '', description: '', pack_id: '', data_source_ids: [], intro: '',
-  recommended_questions: [], icon: 'robot', color: '#2563eb',
+  recommended_questions: [], icon: 'robot', color: '#5645D4',
 };
 
 export function Agents() {

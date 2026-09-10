@@ -22,9 +22,9 @@ import { EChart } from '../components/charts/EChart';
 import { useAppStore } from '../stores/appStore';
 
 const TYPE_META: Record<string, { icon: React.ReactNode; label: string; color: string }> = {
-  chart: { icon: <BarChartOutlined />, label: '图表', color: '#2563eb' },
-  table: { icon: <TableOutlined />, label: '表格', color: '#0d9488' },
-  text: { icon: <FileTextOutlined />, label: '结论', color: '#7c3aed' },
+  chart: { icon: <BarChartOutlined />, label: '图表', color: '#5645D4' },
+  table: { icon: <TableOutlined />, label: '表格', color: '#2A9D99' },
+  text: { icon: <FileTextOutlined />, label: '结论', color: '#7B5CF5' },
   insight: { icon: <FileTextOutlined />, label: '洞察', color: '#ea580c' },
 };
 
@@ -289,7 +289,7 @@ export function Dashboards() {
       </div>
 
       {/* 详情：FineBI 风格画布（浅灰底 + 标题栏卡片 + 内容卡片网格） */}
-      <div className="thin-scroll" style={{ flex: 1, minWidth: 0, overflow: 'auto', background: '#f5f7fa', padding: 16 }}>
+      <div className="thin-scroll" style={{ flex: 1, minWidth: 0, overflow: 'auto', background: '#F6F5F4', padding: 16 }}>
         <Spin spinning={loading}>
           {current ? (
             <>
@@ -301,7 +301,7 @@ export function Dashboards() {
               }}>
                 <div style={{
                   width: 6, height: 34, borderRadius: 3,
-                  background: 'linear-gradient(180deg,#2563eb,#7c3aed)', flexShrink: 0,
+                  background: 'linear-gradient(180deg,#5645D4,#7B5CF5)', flexShrink: 0,
                 }} />
                 <div style={{ minWidth: 0 }}>
                   <div style={{ fontSize: 18, fontWeight: 700 }}>{current.name}</div>

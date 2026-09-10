@@ -164,9 +164,9 @@ export function Usage() {
   ];
 
   const statCards = [
-    { label: '累计输入 Token', value: fmtTokens(stats?.token_total_input ?? 0), icon: <FileTextOutlined />, color: '#2563eb', bg: '#eff6ff' },
-    { label: '累计输出 Token', value: fmtTokens(stats?.token_total_output ?? 0), icon: <MessageOutlined />, color: '#0d9488', bg: '#f0fdfa' },
-    { label: '总消耗 Token', value: fmtTokens((stats?.token_total_input ?? 0) + (stats?.token_total_output ?? 0)), icon: <ThunderboltOutlined />, color: '#7c3aed', bg: '#f5f3ff' },
+    { label: '累计输入 Token', value: fmtTokens(stats?.token_total_input ?? 0), icon: <FileTextOutlined />, color: '#5645D4', bg: '#ECE7F8' },
+    { label: '累计输出 Token', value: fmtTokens(stats?.token_total_output ?? 0), icon: <MessageOutlined />, color: '#2A9D99', bg: '#f0fdfa' },
+    { label: '总消耗 Token', value: fmtTokens((stats?.token_total_input ?? 0) + (stats?.token_total_output ?? 0)), icon: <ThunderboltOutlined />, color: '#7B5CF5', bg: '#f5f3ff' },
     { label: '预估费用', value: fmtCost(stats?.token_total_cost ?? 0), icon: <DollarOutlined />, color: '#ea580c', bg: '#fff7ed' },
     { label: '分析次数', value: String(stats?.token_runs ?? 0), icon: <BarChartOutlined />, color: '#dc2626', bg: '#fef2f2' },
   ];

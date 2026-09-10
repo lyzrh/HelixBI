@@ -30,7 +30,7 @@ export function UserBubble({ content }: { content: string }) {
 function AssistantShell({ children }: { children: React.ReactNode }) {
   return (
     <div style={{ display: 'flex', gap: 10, margin: '16px 0' }}>
-      <Avatar style={{ flexShrink: 0, background: 'linear-gradient(135deg,#2563eb,#7c3aed)' }} icon={<RobotOutlined />} />
+      <Avatar style={{ flexShrink: 0, background: 'linear-gradient(135deg,#5645D4,#7B5CF5)' }} icon={<RobotOutlined />} />
       <div style={{ flex: 1, minWidth: 0 }}>
         {children}
       </div>

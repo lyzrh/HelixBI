@@ -9,11 +9,7 @@
 
 [快速开始](#快速开始) · [核心特性](#核心特性) · [架构](#架构) · [技术栈](#技术栈) · [Roadmap](#roadmap)
 
-<<<<<<< HEAD
 **简体中文** · [English](README.md)
-=======
-**简体中文** · [English](README.en.md)
->>>>>>> 2626b64fe3aa3930bae39c8aaa4e51bef7e6b2cb
 
 </div>
 

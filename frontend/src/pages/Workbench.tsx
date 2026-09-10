@@ -16,24 +16,24 @@ function formatNumber(n: number): string {
 }
 
 const MODULES = [
-  { key: '/chat', icon: <MessageOutlined />, title: '对话分析', desc: '自然语言提问，Agent 自动生成代码并沙箱执行，流式返回结论与图表', color: '#2563eb', bg: '#eff6ff' },
-  { key: '/explore', icon: <PieChartOutlined />, title: '自助分析', desc: '拖拽字段即时出图（柱状/折线/饼图），本地计算零消耗，可沉淀到仪表板', color: '#0d9488', bg: '#f0fdfa' },
-  { key: '/agents', icon: <ThunderboltOutlined />, title: '场景 Agent', desc: '零售销售 / 生产制造行业专家，预置口径与推荐问题，开箱即聊', color: '#7c3aed', bg: '#f5f3ff' },
-  { key: '/skills', icon: <ExperimentOutlined />, title: 'Skill 库', desc: '验证过的分析路径自动沉淀，相似问题秒级重放，持续积累分析资产', color: '#d97706', bg: '#fffbeb' },
-  { key: '/insights', icon: <SoundOutlined />, title: '主动洞察', desc: '规则引擎扫描指标突变与异常，LLM 生成经营诊断，不错过关键信号', color: '#ea580c', bg: '#fff7ed' },
-  { key: '/dashboards', icon: <DashboardOutlined />, title: '仪表板', desc: '图表 / 表格 / 结论 / 洞察统一沉淀，支持导出 HTML 报告', color: '#be185d', bg: '#fdf2f8' },
+  { key: '/chat', icon: <MessageOutlined />, title: '对话分析', desc: '自然语言提问，Agent 自动生成代码并沙箱执行，流式返回结论与图表', color: '#5645D4', bg: '#ECE7F8' },
+  { key: '/explore', icon: <PieChartOutlined />, title: '自助分析', desc: '拖拽字段即时出图（柱状/折线/饼图），本地计算零消耗，可沉淀到仪表板', color: '#2A9D99', bg: '#D9F0EE' },
+  { key: '/agents', icon: <ThunderboltOutlined />, title: '场景 Agent', desc: '零售销售 / 生产制造行业专家，预置口径与推荐问题，开箱即聊', color: '#7B5CF5', bg: '#EFE9FC' },
+  { key: '/skills', icon: <ExperimentOutlined />, title: 'Skill 库', desc: '验证过的分析路径自动沉淀，相似问题秒级重放，持续积累分析资产', color: '#B7791F', bg: '#FBF3DC' },
+  { key: '/insights', icon: <SoundOutlined />, title: '主动洞察', desc: '规则引擎扫描指标突变与异常，LLM 生成经营诊断，不错过关键信号', color: '#DD5B00', bg: '#FFE9D6' },
+  { key: '/dashboards', icon: <DashboardOutlined />, title: '仪表板', desc: '图表 / 表格 / 结论 / 洞察统一沉淀，支持导出 HTML 报告', color: '#C2255C', bg: '#FDE0EC' },
 ];
 
 const SCENARIOS = [
   {
     title: '零售经营监控', icon: <PieChartOutlined />, to: '/agents',
-    color: '#0d9488', bg: '#f0fdfa',
+    color: '#2A9D99', bg: '#f0fdfa',
     desc: '面向零售销售域：品类 / 区域 / 门店 / 渠道多口径分析，客单价等派生指标自动对齐口径。',
     points: ['各品类销售额 TopN 与占比', '近 90 天销售趋势与环比', '区域客单价对比'],
   },
   {
     title: '生产质量分析', icon: <ThunderboltOutlined />, to: '/agents',
-    color: '#2563eb', bg: '#eff6ff',
+    color: '#5645D4', bg: '#ECE7F8',
     desc: '面向生产制造域：产量 / 良率 / 达成率 / 停机时长，OEE 近似口径预置。',
     points: ['各产线产量与达成率', '良率趋势与异常预警', '停机时长排行'],
   },
@@ -77,43 +77,43 @@ export function Workbench() {
 
   return (
     <div style={{ padding: 24, maxWidth: 1240, margin: '0 auto' }}>
-      {/* 欢迎横幅 */}
+      {/* 欢迎横幅：深海军蓝 + 紫色主 CTA（绎紫设计系统） */}
       <div style={{
-        borderRadius: 16, padding: '28px 32px', color: '#fff', position: 'relative', overflow: 'hidden',
-        background: 'linear-gradient(120deg,#1d4ed8 0%,#2563eb 45%,#7c3aed 100%)',
+        borderRadius: 12, padding: '32px 36px', color: '#fff', position: 'relative', overflow: 'hidden',
+        background: '#0A1530',
       }}>
         <div style={{
           position: 'absolute', right: -40, top: -60, width: 260, height: 260, borderRadius: '50%',
-          background: 'rgba(255,255,255,0.08)',
+          background: 'rgba(86,69,212,0.18)',
         }} />
         <div style={{
           position: 'absolute', right: 90, bottom: -80, width: 190, height: 190, borderRadius: '50%',
-          background: 'rgba(255,255,255,0.06)',
+          background: 'rgba(255,255,255,0.04)',
         }} />
         <div style={{ position: 'relative' }}>
-          <div style={{ fontSize: 13, opacity: 0.85 }}>面向制造业与零售业的对话式智能分析</div>
-          <div style={{ fontSize: 26, fontWeight: 700, margin: '6px 0 10px' }}>
+          <div style={{ fontSize: 13, color: '#D6B6F6', fontWeight: 500 }}>面向制造业与零售业的对话式智能分析</div>
+          <div style={{ fontSize: 26, fontWeight: 600, margin: '6px 0 10px', letterSpacing: -0.5 }}>
             欢迎使用 绎数 · 企业级数据分析助手
           </div>
-          <div style={{ fontSize: 13.5, opacity: 0.9, maxWidth: 620, lineHeight: 1.7 }}>
+          <div style={{ fontSize: 13.5, color: '#A4A097', maxWidth: 620, lineHeight: 1.7 }}>
             用自然语言提问，Agent 自动完成数据理解、代码生成与沙箱执行；
             拖拽字段即时出图；分析资产沉淀为 Skill 与仪表板，越用越聪明。
           </div>
-          <div style={{ display: 'flex', gap: 10, marginTop: 18 }}>
-            <Button size="large" onClick={() => navigate('/chat')}
-              style={{ background: '#fff', borderColor: '#fff', fontWeight: 600, borderRadius: 10 }}>
+          <div style={{ display: 'flex', gap: 12, marginTop: 18 }}>
+            <Button type="primary" size="large" onClick={() => navigate('/chat')}
+              style={{ fontWeight: 500 }}>
               开始对话分析 <ArrowRightOutlined />
             </Button>
             <Button size="large" ghost onClick={() => navigate('/explore')}
-              style={{ color: '#fff', borderColor: 'rgba(255,255,255,0.6)', borderRadius: 10 }}>
+              style={{ color: '#fff', borderColor: '#A4A097' }}>
               自助拖拽分析
             </Button>
           </div>
           <div style={{ marginTop: 14, display: 'flex', gap: 8 }}>
-            <Tag style={{ background: 'rgba(255,255,255,0.15)', color: '#fff', border: 'none' }}>
+            <Tag style={{ background: '#1A2A52', color: '#A4A097', border: 'none', borderRadius: 999 }}>
               模型：{health?.llm_configured ? health.model : '未配置'}
             </Tag>
-            <Tag style={{ background: 'rgba(255,255,255,0.15)', color: '#fff', border: 'none' }}>
+            <Tag style={{ background: '#1A2A52', color: '#A4A097', border: 'none', borderRadius: 999 }}>
               沙箱：{health?.sandbox ? '在线' : '离线'}
             </Tag>
           </div>
@@ -135,7 +135,7 @@ export function Workbench() {
 
       {/* 功能模块（Tab 化：模块 / 价值场景 / 使用指南） */}
       <div style={{ fontSize: 15, fontWeight: 600, margin: '24px 0 4px', display: 'flex', alignItems: 'center', gap: 8 }}>
-        <span style={{ width: 3, height: 15, borderRadius: 2, background: 'linear-gradient(#2563eb,#7c3aed)', display: 'inline-block' }} />
+        <span style={{ width: 3, height: 15, borderRadius: 2, background: '#5645D4', display: 'inline-block' }} />
         功能模块
       </div>
       <Tabs

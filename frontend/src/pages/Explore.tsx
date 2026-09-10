@@ -32,7 +32,7 @@ interface MetricSlot { field: string; agg: Agg }
 interface FilterSlot { field: string; op: FilterOp; value: string }
 
 const FIELD_ICON: Record<string, React.ReactNode> = {
-  text: <FieldStringOutlined style={{ color: '#2563eb' }} />,
+  text: <FieldStringOutlined style={{ color: '#5645D4' }} />,
   number: <FieldNumberOutlined style={{ color: '#16a34a' }} />,
   date: <FieldStringOutlined style={{ color: '#d97706' }} />,
 };
@@ -533,6 +533,6 @@ const slotBoxStyle: React.CSSProperties = {
   minHeight: 44, borderRadius: 8, border: '1.5px dashed #cbd5e1', background: '#fafbfd',
   padding: '6px 8px', display: 'flex', flexWrap: 'wrap', gap: 6, alignItems: 'center',
 };
-const slotTagStyle: React.CSSProperties = { fontSize: 12.5, padding: '2px 8px', background: '#eff6ff', borderColor: '#bfdbfe' };
+const slotTagStyle: React.CSSProperties = { fontSize: 12.5, padding: '2px 8px', background: '#ECE7F8', borderColor: '#C9BBEE' };
 const emptyHintStyle: React.CSSProperties = { fontSize: 12, color: '#cbd5e1', padding: '2px 4px' };
 const labelStyle: React.CSSProperties = { fontSize: 12.5, color: '#64748b', marginBottom: 4 };

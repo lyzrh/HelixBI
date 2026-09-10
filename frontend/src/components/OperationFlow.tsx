@@ -25,7 +25,7 @@ export function OperationFlow({ steps, current = 0, defaultOpen = true }: Props)
       <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 10 }}>
         <span
           className="flow-toggle"
-          style={{ fontSize: 13, color: '#2563eb', cursor: 'pointer', userSelect: 'none' }}
+          style={{ fontSize: 13, color: '#5645D4', cursor: 'pointer', userSelect: 'none' }}
           onClick={() => setOpen((v) => !v)}
         >
           {open ? '收起操作流程' : '展开操作流程'}
@@ -35,8 +35,8 @@ export function OperationFlow({ steps, current = 0, defaultOpen = true }: Props)
         <div
           style={{
             position: 'relative',
-            background: 'linear-gradient(90deg,#eff6ff 0%,#f0f9ff 100%)',
-            border: '1px solid #dbeafe',
+            background: 'linear-gradient(90deg,#ECE7F8 0%,#f0f9ff 100%)',
+            border: '1px solid #DCD2F5',
             borderRadius: 12,
             padding: '18px 20px 16px',
             display: 'flex',
@@ -47,8 +47,8 @@ export function OperationFlow({ steps, current = 0, defaultOpen = true }: Props)
           {steps.map((s, i) => {
             const done = current > i + 1;
             const active = current === i + 1;
-            const color = done ? '#16a34a' : active ? '#2563eb' : '#94a3b8';
-            const bg = done ? '#f0fdf4' : active ? '#eff6ff' : '#f8fafc';
+            const color = done ? '#16a34a' : active ? '#5645D4' : '#94a3b8';
+            const bg = done ? '#f0fdf4' : active ? '#ECE7F8' : '#f8fafc';
             return (
               <div key={s.title} style={{ display: 'flex', alignItems: 'stretch', minWidth: 190, flex: 1 }}>
                 <div style={{ flex: 1, padding: '4px 12px' }}>
@@ -66,7 +66,7 @@ export function OperationFlow({ steps, current = 0, defaultOpen = true }: Props)
                   )}
                 </div>
                 {i < steps.length - 1 && (
-                  <div style={{ display: 'flex', alignItems: 'center', color: '#bfdbfe', fontSize: 16 }}>
+                  <div style={{ display: 'flex', alignItems: 'center', color: '#C9BBEE', fontSize: 16 }}>
                     <RightOutlined />
                   </div>
                 )}

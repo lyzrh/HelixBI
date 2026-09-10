@@ -20,7 +20,7 @@ const PROVIDERS = [
   { key: 'custom', label: '自定义', base_url: '', model: '' },
 ];
 
-const AVATAR_COLORS = ['#2563eb', '#7c3aed', '#0d9488', '#ea580c', '#dc2626', '#0891b2', '#4f46e5', '#be185d'];
+const AVATAR_COLORS = ['#5645D4', '#7B5CF5', '#2A9D99', '#ea580c', '#dc2626', '#0891b2', '#4f46e5', '#be185d'];
 
 /** 职位预设：可从下拉选择，也可自由输入 */
 const ROLE_OPTIONS = [
@@ -339,7 +339,7 @@ export function SettingsModal({ open, onClose }: { open: boolean; onClose: () =>
         <div style={{ paddingTop: 4 }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 14, marginBottom: 18 }}>
             <Avatar size={56} style={{
-              background: profile?.avatar_color ?? '#2563eb', fontSize: 22, fontWeight: 600,
+              background: profile?.avatar_color ?? '#5645D4', fontSize: 22, fontWeight: 600,
             }}>
               {(profile?.nickname || 'U').slice(0, 1)}
             </Avatar>

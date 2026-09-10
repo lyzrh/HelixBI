@@ -215,14 +215,14 @@ export function Skills() {
         </div>
         <div style={{ ...overviewCardStyle, flex: '1 1 150px' }}>
           <Progress type="circle" size={56} percent={okRate}
-            strokeColor={okRate >= 80 ? '#0d9488' : '#ea580c'} format={() => `${okRate}%`} />
+            strokeColor={okRate >= 80 ? '#2A9D99' : '#ea580c'} format={() => `${okRate}%`} />
           <div>
             <div style={{ fontSize: 12.5, color: '#64748b' }}>重放成功率</div>
             <div style={{ fontSize: 11.5, color: '#94a3b8' }}>{okRuns} / {totalRuns} 次</div>
           </div>
         </div>
         <div style={{ ...overviewCardStyle, flex: '1 1 200px' }}>
-          <CaretRightOutlined style={{ fontSize: 26, color: '#2563eb' }} />
+          <CaretRightOutlined style={{ fontSize: 26, color: '#5645D4' }} />
           <div>
             <div style={{ fontSize: 12.5, color: '#64748b' }}>累计重放次数</div>
             <div style={{ fontSize: 24, fontWeight: 700 }}>{totalRuns}</div>

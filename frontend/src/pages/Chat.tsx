@@ -256,7 +256,7 @@ export function Chat() {
       </div>
 
       {/* 主区 */}
-      <div style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', background: '#f5f7fa' }}>
+      <div style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', background: '#F6F5F4' }}>
         {/* 顶栏：会话信息 + 数据源选择 */}
         <div style={{ background: '#fff', borderBottom: '1px solid #eef2f7', padding: '10px 20px', display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
           <div style={{ fontWeight: 600, fontSize: 14.5, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: 320 }}>
@@ -280,7 +280,7 @@ export function Chat() {
                 <div style={{ textAlign: 'center', marginBottom: 24 }}>
                   <div style={{
                     width: 56, height: 56, borderRadius: 16, margin: '0 auto 14px',
-                    background: 'linear-gradient(135deg,#3b82f6,#8b5cf6)',
+                    background: 'linear-gradient(135deg,#7B5CF5,#A18BE8)',
                     color: '#fff', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 26,
                   }}>绎</div>
                   <div style={{ fontSize: 22, fontWeight: 700 }}>绎数 · 对话式数据分析</div>
@@ -375,13 +375,13 @@ export function Chat() {
             <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginTop: 10 }}>
               <Tooltip title="开启后先解析查询意图（指标/维度/时间范围等），人工确认后再执行">
                 <Space size={6}>
-                  <CheckSquareOutlined style={{ color: confirmMode ? '#2563eb' : '#94a3b8' }} />
+                  <CheckSquareOutlined style={{ color: confirmMode ? '#5645D4' : '#94a3b8' }} />
                   <Switch size="small" checked={confirmMode} onChange={setConfirmMode} />
                   <span style={{ fontSize: 12.5, color: '#64748b' }}>先确认查询</span>
                 </Space>
               </Tooltip>
               <div style={{ flex: 1 }} />
-              <span style={{ fontSize: 12, color: busy ? '#2563eb' : '#cbd5e1' }}>
+              <span style={{ fontSize: 12, color: busy ? '#5645D4' : '#cbd5e1' }}>
                 {busy ? '分析中…' : `${messages.length} 条消息`}
               </span>
               <Button type="primary" icon={<SendOutlined />} loading={busy}

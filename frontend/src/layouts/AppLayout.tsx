@@ -7,6 +7,7 @@ import {
 import { useEffect, useState } from 'react';
 import { Outlet, useLocation, useNavigate } from 'react-router-dom';
 import { SettingsModal } from '../components/SettingsModal';
+import { HelixBadge } from '../components/HelixMark';
 import { useAppStore } from '../stores/appStore';
 
 const NAV = [
@@ -39,25 +40,24 @@ export function AppLayout() {
       <Layout.Sider width={208} theme="dark"
         style={{
           position: 'fixed', left: 0, top: 0, bottom: 0, overflow: 'auto',
-          background: 'linear-gradient(180deg,#0b1a38 0%,#0f1e3d 60%,#12233f 100%)',
+          background: '#0A1530',
         }}>
-        <div style={{ padding: '20px 16px 14px', display: 'flex', alignItems: 'center', gap: 8 }}>
-          <div style={{
-            width: 32, height: 32, borderRadius: 8,
-            background: 'linear-gradient(135deg,#3b82f6,#8b5cf6)',
-            color: '#fff', display: 'flex', alignItems: 'center', justifyContent: 'center',
-            fontSize: 16, fontWeight: 700,
-          }}>绎</div>
+        <div style={{ padding: '20px 16px 14px', display: 'flex', alignItems: 'center', gap: 10 }}>
+          <HelixBadge size={34} />
           <div>
             <div style={{ fontWeight: 700, fontSize: 15, color: '#fff' }}>绎数</div>
-            <div style={{ fontSize: 11, color: 'rgba(255,255,255,0.45)' }}>Helix BI · 推演数据 洞见本质</div>
+            <div style={{ fontSize: 10, letterSpacing: 2, color: 'rgba(255,255,255,0.45)' }}>HELIX BI</div>
           </div>
         </div>
+        <div style={{ height: 1, background: '#1A2A52', margin: '0 16px 8px' }} />
         <Menu mode="inline" theme="dark" selectedKeys={[navKey]} items={NAV}
           onClick={({ key }) => navigate(key)}
           style={{ borderInlineEnd: 'none', padding: '0 8px', background: 'transparent' }} />
         <div style={{ position: 'absolute', bottom: 16, left: 16, right: 16 }}>
-          <div style={{ fontSize: 12, color: 'rgba(255,255,255,0.55)', display: 'flex', flexDirection: 'column', gap: 6 }}>
+          <div style={{
+            fontSize: 12, color: '#A4A097', display: 'flex', flexDirection: 'column', gap: 6,
+            background: '#131F42', borderRadius: 8, padding: '10px 12px',
+          }}>
             <span>
               沙箱：
               {health?.sandbox
