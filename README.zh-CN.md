@@ -35,15 +35,15 @@
 
 | 对话分析（Agent 流式执行） | 工作台 |
 |:---:|:---:|
-| ![对话分析](screenshots/chat.png) | ![工作台](screenshots/workbench.png) |
+| ![对话分析](https://cdn.jsdelivr.net/gh/lyzrh/HelixBI@main/screenshots/chat.png) | ![工作台](https://cdn.jsdelivr.net/gh/lyzrh/HelixBI@main/screenshots/workbench.png) |
 
 | 自助分析（拖拽零 token 出图） | 主动洞察（定时扫描 + 概览） |
 |:---:|:---:|
-| ![自助分析](screenshots/explore.png) | ![主动洞察](screenshots/insights.png) |
+| ![自助分析](https://cdn.jsdelivr.net/gh/lyzrh/HelixBI@main/screenshots/explore.png) | ![主动洞察](https://cdn.jsdelivr.net/gh/lyzrh/HelixBI@main/screenshots/insights.png) |
 
 | 数据源管理（上传 / 数据库 / SQL 查询） |
 |:---:|
-| ![数据源](screenshots/datasources.png) |
+| ![数据源](https://cdn.jsdelivr.net/gh/lyzrh/HelixBI@main/screenshots/datasources.png) |
 
 ## 核心特性
 

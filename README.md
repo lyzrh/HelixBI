@@ -1,6 +1,6 @@
 <div align="center">
 
-<img src="docs/logo.svg" alt="Helix BI" width="240"/>
+<img src="https://cdn.jsdelivr.net/gh/lyzrh/HelixBI@main/docs/logo.svg" alt="Helix BI" width="240"/>
 
 # Helix BI
 
@@ -39,15 +39,15 @@ can always connect your own data.
 
 | Conversational Analysis (agent streaming) | Workbench |
 |:---:|:---:|
-| ![Conversational Analysis](screenshots/chat.png) | ![Workbench](screenshots/workbench.png) |
+| ![Conversational Analysis](https://cdn.jsdelivr.net/gh/lyzrh/HelixBI@main/screenshots/chat.png) | ![Workbench](https://cdn.jsdelivr.net/gh/lyzrh/HelixBI@main/screenshots/workbench.png) |
 
 | Self-Service Analytics (drag & drop, zero tokens) | Active Insights (scheduled scans + overview) |
 |:---:|:---:|
-| ![Self-Service Analytics](screenshots/explore.png) | ![Active Insights](screenshots/insights.png) |
+| ![Self-Service Analytics](https://cdn.jsdelivr.net/gh/lyzrh/HelixBI@main/screenshots/explore.png) | ![Active Insights](https://cdn.jsdelivr.net/gh/lyzrh/HelixBI@main/screenshots/insights.png) |
 
 | Datasource Management (upload / database / SQL query) |
 |:---:|
-| ![Datasources](screenshots/datasources.png) |
+| ![Datasources](https://cdn.jsdelivr.net/gh/lyzrh/HelixBI@main/screenshots/datasources.png) |
 
 ## Core Features
 
