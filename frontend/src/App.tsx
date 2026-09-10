@@ -2,6 +2,7 @@ import { useEffect } from 'react';
 import { Navigate, Route, Routes, useLocation } from 'react-router-dom';
 import { App as AntdApp, ConfigProvider } from 'antd';
 import zhCN from 'antd/locale/zh_CN';
+import enUS from 'antd/locale/en_US';
 import dayjs from 'dayjs';
 import 'dayjs/locale/zh-cn';
 import { AppLayout } from './layouts/AppLayout';
@@ -16,12 +17,18 @@ import { Explore } from './pages/Explore';
 import { Usage } from './pages/Usage';
 import { theme } from './theme';
 import { useAppStore } from './stores/appStore';
+import { useLangStore } from './i18n';
 
 dayjs.locale('zh-cn');
 
 export default function App() {
   const location = useLocation();
   const loadHealth = useAppStore((s) => s.loadHealth);
+  const lang = useLangStore((s) => s.lang);
+
+  useEffect(() => {
+    dayjs.locale(lang === 'en' ? 'en' : 'zh-cn');
+  }, [lang]);
 
   useEffect(() => {
     loadHealth();
@@ -34,7 +41,7 @@ export default function App() {
   }, [location.pathname]);
 
   return (
-    <ConfigProvider locale={zhCN} theme={theme}>
+    <ConfigProvider locale={lang === 'en' ? enUS : zhCN} theme={theme}>
       <AntdApp>
         <Routes>
           <Route element={<AppLayout />}>

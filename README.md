@@ -61,7 +61,7 @@ can always connect your own data.
 | **Dashboards** | Pin charts / tables / conclusions from conversations and insight diagnoses in one click; grid-layout browsing; export to self-contained HTML reports |
 | **Datasources** | CSV / Excel / Parquet upload; MySQL / PostgreSQL / SQLite connections (test before saving); DB tables materialized to parquet cache before entering the sandbox; data preview + **read-only SQL query** (executed on local sqlite — zero tokens) |
 | **Semantic Layer** | Industry semantic packs define metrics (with derived formulas: yield, attainment rate, average order value, etc.), dimensions, synonyms, time conventions, and chart suggestions — injected into generation prompts to keep definitions consistent |
-| **Settings Center** | Hot-reload LLM endpoints (DeepSeek / Zhipu / Qwen / any OpenAI-compatible API — takes effect on save, no restart); preferences (answer style / creativity / follow-up toggle / custom instructions); profile |
+| **Settings Center** | Hot-reload LLM endpoints (DeepSeek / Zhipu / Qwen / any OpenAI-compatible API — takes effect on save, no restart); preferences (answer style / creativity / follow-up toggle / custom instructions); **UI language toggle (中文 / English)** — applies instantly to navigation / workbench / settings, persisted locally; profile |
 | **Reliability** | Network-isolated sandbox + CPU / memory limits + read-only data; `dahelper` JSON contract for returning results; SQLite metadata store in WAL mode |
 
 ## Architecture
@@ -221,7 +221,7 @@ execution, self-repair, and follow-up recommendation.
 
 ## Roadmap
 
-- **R2**: dashboards rendered client-side (interactive ECharts instead of PNG), insight subscription push, multi-user support & permissions
+- **R2**: dashboards rendered client-side (interactive ECharts instead of PNG), insight subscription push, multi-user support & permissions, i18n for the remaining pages (the zh/en toggle already covers navigation / workbench / settings)
 - **R3**: regression evaluation (fixed question sets for accuracy), visual semantic-pack editor, metric lineage
 
 ## License

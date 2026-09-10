@@ -10,6 +10,7 @@ import {
 } from '@ant-design/icons';
 import { api } from '../api/client';
 import { useAppStore } from '../stores/appStore';
+import { useT, useLangStore } from '../i18n';
 
 /** 服务商预设（OpenAI 兼容接口） */
 const PROVIDERS = [
@@ -50,6 +51,9 @@ interface UserPreferences {
 
 export function SettingsModal({ open, onClose }: { open: boolean; onClose: () => void }) {
   const { message } = AntApp.useApp();
+  const t = useT();
+  const lang = useLangStore((s) => s.lang);
+  const setLang = useLangStore((s) => s.setLang);
   const loadHealth = useAppStore((s) => s.loadHealth);
 
   // ---- LLM ----
@@ -115,7 +119,7 @@ export function SettingsModal({ open, onClose }: { open: boolean; onClose: () =>
   };
 
   const doTest = async () => {
-    if (!apiKey && !masked) { message.warning('请先填写 API Key'); return; }
+    if (!apiKey && !masked) { message.warning(t('set.needKey')); return; }
     setTesting(true);
     setTestResult(null);
     try {
@@ -131,9 +135,9 @@ export function SettingsModal({ open, onClose }: { open: boolean; onClose: () =>
   };
 
   const doSave = async () => {
-    if (!baseUrl.trim()) { message.warning('请填写接口地址'); return; }
-    if (!model.trim()) { message.warning('请填写模型名'); return; }
-    if (!apiKey && !masked) { message.warning('请填写 API Key'); return; }
+    if (!baseUrl.trim()) { message.warning(t('set.needUrl')); return; }
+    if (!model.trim()) { message.warning(t('set.needModel')); return; }
+    if (!apiKey && !masked) { message.warning(t('set.needKey')); return; }
     setSaving(true);
     try {
       const r = await api.put<{ message: string }>('/api/settings/llm', {
@@ -152,7 +156,7 @@ export function SettingsModal({ open, onClose }: { open: boolean; onClose: () =>
 
   const saveProfile = async () => {
     if (!profile) return;
-    if (!profile.nickname.trim()) { message.warning('昵称不能为空'); return; }
+    if (!profile.nickname.trim()) { message.warning(t('set.needNickname')); return; }
     setProfileSaving(true);
     try {
       const saved = await api.put<UserProfile>('/api/settings/profile', {
@@ -161,7 +165,7 @@ export function SettingsModal({ open, onClose }: { open: boolean; onClose: () =>
         avatar_color: profile.avatar_color,
       });
       setProfile(saved);
-      message.success('个人资料已保存');
+      message.success(t('set.profileSaved'));
     } catch { /* client 已提示 */ } finally {
       setProfileSaving(false);
     }
@@ -178,7 +182,7 @@ export function SettingsModal({ open, onClose }: { open: boolean; onClose: () =>
         custom_instructions: prefs.custom_instructions,
       });
       setPrefs(saved);
-      message.success('偏好已保存，下一轮分析生效');
+      message.success(t('set.prefsSaved'));
     } catch { /* client 已提示 */ } finally {
       setPrefsSaving(false);
     }
@@ -189,12 +193,12 @@ export function SettingsModal({ open, onClose }: { open: boolean; onClose: () =>
       key: 'llm',
       label: (
         <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
-          <ApiOutlined /> LLM 接口
+          <ApiOutlined /> {t('set.tabLlm')}
         </span>
       ),
       children: (
         <div style={{ paddingTop: 4 }}>
-          <div style={labelStyle}>服务商（点击快捷填充）</div>
+          <div style={labelStyle}>{t('set.provider')}</div>
           <Space size={8} wrap style={{ marginBottom: 14 }}>
             {PROVIDERS.map((p) => (
               <Tag.CheckableTag
@@ -203,12 +207,12 @@ export function SettingsModal({ open, onClose }: { open: boolean; onClose: () =>
                 onChange={() => pickProvider(p.key)}
                 style={{ padding: '3px 12px', fontSize: 13, borderRadius: 6 }}
               >
-                {p.label}
+                {p.key === 'custom' ? t('set.providerCustom') : p.label}
               </Tag.CheckableTag>
             ))}
           </Space>
 
-          <div style={labelStyle}>接口地址（Base URL）</div>
+          <div style={labelStyle}>{t('set.baseUrl')}</div>
           <Input
             value={baseUrl} placeholder="https://api.deepseek.com"
             onChange={(e) => { setBaseUrl(e.target.value); setActiveProvider('custom'); setTestResult(null); }}
@@ -216,20 +220,20 @@ export function SettingsModal({ open, onClose }: { open: boolean; onClose: () =>
           />
 
           <div style={labelStyle}>
-            API Key
+            {t('set.apiKey')}
             {masked && (
               <span style={{ fontWeight: 400, color: '#94a3b8', marginLeft: 8, fontSize: 12 }}>
-                当前：{masked}（留空则沿用）
+                {t('set.apiKeyKeep', { m: masked })}
               </span>
             )}
           </div>
           <Input.Password
-            value={apiKey} placeholder={masked ? `留空保持 ${masked} 不变` : 'sk-...'}
+            value={apiKey} placeholder={masked ? t('set.apiKeyKeepShort', { m: masked }) : 'sk-...'}
             onChange={(e) => { setApiKey(e.target.value); setTestResult(null); }}
             style={{ marginBottom: 12 }}
           />
 
-          <div style={labelStyle}>模型名</div>
+          <div style={labelStyle}>{t('set.modelName')}</div>
           <Input
             value={model} placeholder="deepseek-chat"
             onChange={(e) => { setModel(e.target.value); setActiveProvider('custom'); setTestResult(null); }}
@@ -251,14 +255,13 @@ export function SettingsModal({ open, onClose }: { open: boolean; onClose: () =>
           )}
 
           <div style={{ display: 'flex', gap: 10 }}>
-            <Button icon={<ThunderboltOutlined />} loading={testing} onClick={doTest}>测试连接</Button>
+            <Button icon={<ThunderboltOutlined />} loading={testing} onClick={doTest}>{t('set.test')}</Button>
             <div style={{ flex: 1 }} />
-            <Button type="primary" icon={<ApiOutlined />} loading={saving} onClick={doSave}>保存并生效</Button>
+            <Button type="primary" icon={<ApiOutlined />} loading={saving} onClick={doSave}>{t('set.save')}</Button>
           </div>
 
           <div style={{ fontSize: 12, color: '#94a3b8', marginTop: 14, lineHeight: 1.7 }}>
-            保存后立即生效（无需重启），同时写入 .env 持久化。
-            测试连接只发送一次极小请求（max_tokens=1），几乎不消耗额度。
+            {t('set.llmNote')}
           </div>
         </div>
       ),
@@ -267,53 +270,66 @@ export function SettingsModal({ open, onClose }: { open: boolean; onClose: () =>
       key: 'prefs',
       label: (
         <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
-          <SlidersOutlined /> 偏好设置
+          <SlidersOutlined /> {t('set.tabPrefs')}
         </span>
       ),
       children: (
         <div style={{ paddingTop: 4 }}>
-          <div style={labelStyle}>回答风格</div>
+          <div style={labelStyle}>{t('set.lang')}</div>
+          <Radio.Group
+            value={lang}
+            onChange={(e) => setLang(e.target.value)}
+            style={{ marginBottom: 6 }}
+          >
+            <Radio.Button value="zh">{t('set.langZh')}</Radio.Button>
+            <Radio.Button value="en">{t('set.langEn')}</Radio.Button>
+          </Radio.Group>
+          <div style={{ fontSize: 12, color: '#94a3b8', marginTop: -6, marginBottom: 16, lineHeight: 1.6 }}>
+            {t('set.langHint')}
+          </div>
+
+          <div style={labelStyle}>{t('set.answerStyle')}</div>
           <Radio.Group
             value={prefs?.answer_style ?? 'standard'}
             onChange={(e) => setPrefs((p) => (p ? { ...p, answer_style: e.target.value } : p))}
             style={{ marginBottom: 14 }}
           >
-            <Radio.Button value="concise">简洁</Radio.Button>
-            <Radio.Button value="standard">标准</Radio.Button>
-            <Radio.Button value="detailed">详细</Radio.Button>
+            <Radio.Button value="concise">{t('set.styleConcise')}</Radio.Button>
+            <Radio.Button value="standard">{t('set.styleStandard')}</Radio.Button>
+            <Radio.Button value="detailed">{t('set.styleDetailed')}</Radio.Button>
           </Radio.Group>
           <div style={{ fontSize: 12, color: '#94a3b8', marginTop: -8, marginBottom: 16, lineHeight: 1.6 }}>
-            简洁：100 字内只给结论与关键数字；标准：默认平衡；详细：结论 + 依据 + 数据细节 + 业务解读
+            {t('set.styleHint')}
           </div>
 
-          <div style={labelStyle}>回答创意度</div>
+          <div style={labelStyle}>{t('set.creativity')}</div>
           <Radio.Group
             value={prefs?.temperature ?? 0}
             onChange={(e) => setPrefs((p) => (p ? { ...p, temperature: e.target.value } : p))}
             style={{ marginBottom: 6 }}
           >
-            <Radio.Button value={0}>精确</Radio.Button>
-            <Radio.Button value={0.5}>平衡</Radio.Button>
-            <Radio.Button value={0.9}>创意</Radio.Button>
+            <Radio.Button value={0}>{t('set.cPrecise')}</Radio.Button>
+            <Radio.Button value={0.5}>{t('set.cBalanced')}</Radio.Button>
+            <Radio.Button value={0.9}>{t('set.cCreative')}</Radio.Button>
           </Radio.Group>
           <div style={{ fontSize: 12, color: '#94a3b8', marginBottom: 16, lineHeight: 1.6 }}>
-            精确：代码与数字更稳定（推荐分析场景）；创意：表达更多样，适合探索性讨论
+            {t('set.creativityHint')}
           </div>
 
           <div style={{ ...labelStyle, display: 'flex', alignItems: 'center', gap: 8 }}>
-            追问推荐
+            {t('set.followups')}
             <Switch
               size="small"
               checked={prefs?.followups_enabled ?? true}
               onChange={(v) => setPrefs((p) => (p ? { ...p, followups_enabled: v } : p))}
             />
             <span style={{ fontWeight: 400, color: '#94a3b8', fontSize: 12 }}>
-              {prefs?.followups_enabled ? '每次回答后推荐 3 个后续问题' : '关闭后不再推荐（每轮可省一次模型调用）'}
+              {prefs?.followups_enabled ? t('set.followupsOn') : t('set.followupsOff')}
             </span>
           </div>
           <div style={{ height: 12 }} />
 
-          <div style={labelStyle}>自定义指令（助手人设）</div>
+          <div style={labelStyle}>{t('set.customInstr')}</div>
           <Input.TextArea
             rows={4} maxLength={500} showCount
             value={prefs?.custom_instructions ?? ''}
@@ -323,7 +339,7 @@ export function SettingsModal({ open, onClose }: { open: boolean; onClose: () =>
           />
 
           <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
-            <Button type="primary" loading={prefsSaving} onClick={savePrefs}>保存偏好</Button>
+            <Button type="primary" loading={prefsSaving} onClick={savePrefs}>{t('set.savePrefs')}</Button>
           </div>
         </div>
       ),
@@ -332,7 +348,7 @@ export function SettingsModal({ open, onClose }: { open: boolean; onClose: () =>
       key: 'profile',
       label: (
         <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
-          <UserOutlined /> 个人资料
+          <UserOutlined /> {t('set.tabProfile')}
         </span>
       ),
       children: (
@@ -344,31 +360,31 @@ export function SettingsModal({ open, onClose }: { open: boolean; onClose: () =>
               {(profile?.nickname || 'U').slice(0, 1)}
             </Avatar>
             <div>
-              <div style={{ fontWeight: 600, fontSize: 15 }}>{profile?.nickname || '未命名'}</div>
+              <div style={{ fontWeight: 600, fontSize: 15 }}>{profile?.nickname || t('set.unnamed')}</div>
               <div style={{ fontSize: 12.5, color: '#94a3b8' }}>{profile?.role || '—'}</div>
             </div>
           </div>
 
-          <div style={labelStyle}>昵称</div>
+          <div style={labelStyle}>{t('set.nickname')}</div>
           <Input
-            value={profile?.nickname ?? ''} maxLength={20} placeholder="你的名字"
+            value={profile?.nickname ?? ''} maxLength={20} placeholder={t('set.nicknamePh')}
             onChange={(e) => setProfile((p) => (p ? { ...p, nickname: e.target.value } : p))}
             style={{ marginBottom: 12 }}
           />
 
-          <div style={labelStyle}>职位 / 角色（可从下拉选择，也可自由输入）</div>
+          <div style={labelStyle}>{t('set.role')}</div>
           <AutoComplete
             value={profile?.role ?? ''}
             options={ROLE_OPTIONS}
             maxLength={20}
-            placeholder="选择或输入，如：数据分析师 / 运营经理"
+            placeholder={t('set.rolePh')}
             filterOption={(input, option) =>
               (option?.value ?? '').toLowerCase().includes(input.toLowerCase())}
             onChange={(v) => setProfile((p) => (p ? { ...p, role: v } : p))}
             style={{ width: '100%', marginBottom: 14 }}
           />
 
-          <div style={labelStyle}>头像颜色</div>
+          <div style={labelStyle}>{t('set.avatarColor')}</div>
           <Space size={10} wrap style={{ marginBottom: 18 }}>
             {AVATAR_COLORS.map((c) => (
               <div
@@ -385,7 +401,7 @@ export function SettingsModal({ open, onClose }: { open: boolean; onClose: () =>
           </Space>
 
           <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
-            <Button type="primary" loading={profileSaving} onClick={saveProfile}>保存资料</Button>
+            <Button type="primary" loading={profileSaving} onClick={saveProfile}>{t('set.saveProfile')}</Button>
           </div>
         </div>
       ),
@@ -393,7 +409,7 @@ export function SettingsModal({ open, onClose }: { open: boolean; onClose: () =>
   ];
 
   return (
-    <Modal open={open} title="设置中心" width={560} onCancel={onClose} footer={null}>
+    <Modal open={open} title={t('set.title')} width={560} onCancel={onClose} footer={null}>
       <Tabs items={items} defaultActiveKey="llm" style={{ marginTop: 4 }} />
     </Modal>
   );

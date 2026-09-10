@@ -9,21 +9,23 @@ import { Outlet, useLocation, useNavigate } from 'react-router-dom';
 import { SettingsModal } from '../components/SettingsModal';
 import { HelixBadge } from '../components/HelixMark';
 import { useAppStore } from '../stores/appStore';
+import { useT, type StrKey } from '../i18n';
 
 const NAV = [
-  { key: '/', icon: <RocketOutlined />, label: '工作台' },
-  { key: '/chat', icon: <MessageOutlined />, label: '对话分析' },
-  { key: '/explore', icon: <PieChartOutlined />, label: '自助分析' },
-  { key: '/agents', icon: <ThunderboltOutlined />, label: '场景 Agent' },
-  { key: '/skills', icon: <ExperimentOutlined />, label: 'Skill 库' },
-  { key: '/insights', icon: <SoundOutlined />, label: '主动洞察' },
-  { key: '/dashboards', icon: <DashboardOutlined />, label: '仪表板' },
-  { key: '/datasources', icon: <DatabaseOutlined />, label: '数据源' },
+  { key: '/', icon: <RocketOutlined />, labelKey: 'nav.workbench' as StrKey },
+  { key: '/chat', icon: <MessageOutlined />, labelKey: 'nav.chat' as StrKey },
+  { key: '/explore', icon: <PieChartOutlined />, labelKey: 'nav.explore' as StrKey },
+  { key: '/agents', icon: <ThunderboltOutlined />, labelKey: 'nav.agents' as StrKey },
+  { key: '/skills', icon: <ExperimentOutlined />, labelKey: 'nav.skills' as StrKey },
+  { key: '/insights', icon: <SoundOutlined />, labelKey: 'nav.insights' as StrKey },
+  { key: '/dashboards', icon: <DashboardOutlined />, labelKey: 'nav.dashboards' as StrKey },
+  { key: '/datasources', icon: <DatabaseOutlined />, labelKey: 'nav.datasources' as StrKey },
 ];
 
 export function AppLayout() {
   const navigate = useNavigate();
   const location = useLocation();
+  const t = useT();
   const health = useAppStore((s) => s.health);
   const profile = useAppStore((s) => s.profile);
   const loadProfile = useAppStore((s) => s.loadProfile);
@@ -33,7 +35,9 @@ export function AppLayout() {
 
   const navKey = location.pathname.startsWith('/chat') ? '/chat' : location.pathname;
   const selected = NAV.find((n) => n.key === navKey);
-  const pageTitle = selected?.label ?? '绎数';
+  const pageTitle = selected ? t(selected.labelKey) : 'Helix BI';
+
+  const menuItems = NAV.map((n) => ({ key: n.key, icon: n.icon, label: t(n.labelKey) }));
 
   return (
     <Layout style={{ minHeight: '100vh' }}>
@@ -50,7 +54,7 @@ export function AppLayout() {
           </div>
         </div>
         <div style={{ height: 1, background: '#1A2A52', margin: '0 16px 8px' }} />
-        <Menu mode="inline" theme="dark" selectedKeys={[navKey]} items={NAV}
+        <Menu mode="inline" theme="dark" selectedKeys={[navKey]} items={menuItems}
           onClick={({ key }) => navigate(key)}
           style={{ borderInlineEnd: 'none', padding: '0 8px', background: 'transparent' }} />
         <div style={{ position: 'absolute', bottom: 16, left: 16, right: 16 }}>
@@ -59,20 +63,20 @@ export function AppLayout() {
             background: '#131F42', borderRadius: 8, padding: '10px 12px',
           }}>
             <span>
-              沙箱：
+              {t('status.sandbox')}：
               {health?.sandbox
-                ? <Tag color="success" style={{ marginLeft: 4 }}>在线</Tag>
-                : <Tag color="warning" style={{ marginLeft: 4 }}>离线</Tag>}
+                ? <Tag color="success" style={{ marginLeft: 4 }}>{t('status.online')}</Tag>
+                : <Tag color="warning" style={{ marginLeft: 4 }}>{t('status.offline')}</Tag>}
             </span>
             <span style={{ display: 'inline-flex', alignItems: 'center' }}>
-              模型：
-              <Tooltip title="点击配置 LLM 接口">
+              {t('status.model')}：
+              <Tooltip title={t('status.tipSettings')}>
                 <Tag
                   color={health?.llm_configured ? 'processing' : 'error'}
                   style={{ marginLeft: 4, cursor: 'pointer' }}
                   onClick={() => setSettingsOpen(true)}
                 >
-                  {health?.llm_configured ? (health.model || '已配置') : '未配置'}
+                  {health?.llm_configured ? (health.model || t('status.online')) : t('status.notConfigured')}
                 </Tag>
               </Tooltip>
             </span>
@@ -89,7 +93,7 @@ export function AppLayout() {
         }}>
           <span style={{ fontSize: 15, fontWeight: 600 }}>{pageTitle}</span>
           <div style={{ flex: 1 }} />
-          <Tooltip title="设置中心（LLM 接口 / 偏好设置 / 个人资料）">
+          <Tooltip title={t('status.tipSettings')}>
             <SettingOutlined
               style={{ fontSize: 17, color: '#64748b', cursor: 'pointer' }}
               onClick={() => setSettingsOpen(true)}
