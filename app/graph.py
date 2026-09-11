@@ -78,19 +78,32 @@ def _pref_block(style_target: str = "summarize") -> str:
     return block
 
 
+def _extract_usage(response: Any) -> tuple[int, int, float]:
+    """从 LLM 响应提取 (input, output, cost)。
+
+    langchain 的 usage_metadata 是 dict 而非属性对象，对它取属性恒为 0；
+    以 dict 读取，并在缺失时回退到 OpenAI 风格 response_metadata.token_usage。
+    """
+    usage = getattr(response, "usage_metadata", None) or {}
+    input_tok = int(usage.get("input_tokens", 0) or 0)
+    output_tok = int(usage.get("output_tokens", 0) or 0)
+    cost = float(usage.get("total_cost", 0) or 0)
+    if input_tok + output_tok == 0:
+        tu = (getattr(response, "response_metadata", None) or {}).get("token_usage") or {}
+        input_tok = int(tu.get("prompt_tokens", 0) or 0)
+        output_tok = int(tu.get("completion_tokens", 0) or 0)
+    return input_tok, output_tok, cost
+
+
 def _log_token_usage(state: "AgentState", node: str, response: Any) -> None:
     """从 LLM 响应中提取 token 用量并持久化（静默失败，不阻塞主流程）。"""
     try:
-        usage = getattr(response, "usage_metadata", None)
-        if not usage:
+        input_tok, output_tok, cost = _extract_usage(response)
+        if input_tok + output_tok == 0:
             return
         from backend.db import SessionLocal
         from backend.models import TokenUsage
-        input_tok = int(getattr(usage, "input_tokens", 0) or 0)
-        output_tok = int(getattr(usage, "output_tokens", 0) or 0)
-        cost = float(getattr(usage, "total_cost", 0) or 0)
-        if input_tok + output_tok == 0:
-            return
+
         run_id = state.get("run_id")
         session_id = state.get("session_id")
         with SessionLocal() as db:
@@ -417,5 +430,7 @@ def stream_analysis(
     merged: dict = dict(initial)
     for update in app.stream(initial, stream_mode="updates"):
         for node, delta in update.items():
+            # 预置 spec 时 parse_intent 返回 {}，LangGraph 会发出 delta=None
+            delta = delta or {}
             merged.update(delta)
             yield node, delta, merged
