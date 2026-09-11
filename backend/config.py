@@ -17,6 +17,9 @@ MATERIALIZED_DIR = DATA_DIR / "materialized"
 MATERIALIZED_MAX_ROWS = int(os.getenv("MATERIALIZED_MAX_ROWS", "500000"))
 MATERIALIZED_TTL_HOURS = int(os.getenv("MATERIALIZED_TTL_HOURS", "24"))
 
+# 上传文件大小上限（MB）
+MAX_UPLOAD_MB = int(os.getenv("MAX_UPLOAD_MB", "200"))
+
 FRONTEND_DIST = PROJECT_ROOT / "frontend" / "dist"
 
 DATA_DIR.mkdir(parents=True, exist_ok=True)
@@ -26,5 +29,5 @@ UPLOADS_DIR.mkdir(parents=True, exist_ok=True)
 __all__ = [
     "PROJECT_ROOT", "RUNS_DIR", "DATA_DIR", "DB_PATH", "UPLOADS_DIR",
     "MATERIALIZED_DIR", "MATERIALIZED_MAX_ROWS", "MATERIALIZED_TTL_HOURS",
-    "FRONTEND_DIST",
+    "MAX_UPLOAD_MB", "FRONTEND_DIST",
 ]

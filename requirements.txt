@@ -3,6 +3,7 @@ langchain-openai>=0.2.14
 langchain-core>=0.3.29
 pandas>=2.2
 openpyxl>=3.1
+xlrd>=2.0.1
 pyarrow>=17
 python-dotenv>=1.0
 markdown>=3.7

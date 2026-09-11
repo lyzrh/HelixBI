@@ -51,6 +51,11 @@ def init_db() -> None:
 def _migrate() -> None:
     """轻量列迁移：create_all 不会给已存在的表补新列。"""
     with engine.connect() as conn:
+        ds_cols = {row[1] for row in conn.exec_driver_sql("PRAGMA table_info(data_sources)")}
+        for col in ("file_name", "file_type"):
+            if col not in ds_cols:
+                conn.exec_driver_sql(f"ALTER TABLE data_sources ADD COLUMN {col} TEXT")
+                conn.commit()
         cols = {row[1] for row in conn.exec_driver_sql("PRAGMA table_info(dashboard_items)")}
         if "span" not in cols:
             conn.exec_driver_sql(

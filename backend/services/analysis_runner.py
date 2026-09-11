@@ -81,14 +81,21 @@ def _prepare(db, data_source_ids: list[int], agent_id: int | None, emit) -> tupl
                 raise ValueError(f"数据库源「{ds.name}」尚未物化，请先在数据源页选择表并缓存")
             files[f"{ds.materialized_table}.parquet"] = ds.materialized_path
         else:
-            files[ds.name] = ds.file_path
+            # 挂载用真实存储文件名（含扩展名），生成代码才能选对读取函数
+            files[ds.file_name or Path(ds.file_path).name] = ds.file_path
 
-    # 场景 Agent 强制使用其语义包（口径一致性），否则逐文件推断
+    # 场景 Agent 强制使用其语义包（口径一致性），否则逐数据源取包（去重）
     if agent_id:
         agent = db.get(SceneAgent, agent_id)
         if agent and agent.pack_id:
             return files, render_semantic_prompt(agent.pack_id)
-    blocks = [render_semantic_prompt(pack_for_file(name)) for name in files]
+    blocks, seen_packs = [], set()
+    for ds in sources:
+        pack_id = ds.pack_id or pack_for_file(ds.name, jload(ds.columns_json, []))
+        if pack_id in seen_packs:
+            continue
+        seen_packs.add(pack_id)
+        blocks.append(render_semantic_prompt(pack_id))
     return files, "\n\n".join(b for b in blocks if b)
 
 

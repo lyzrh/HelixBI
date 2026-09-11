@@ -90,6 +90,10 @@ export function Datasources() {
 
   const doUpload = async (opt: { file: unknown }) => {
     const { file } = opt;
+    if (file instanceof File && file.size > 200 * 1024 * 1024) {
+      message.warning('文件超过 200MB 上限，请先拆分或压缩后再上传');
+      return;
+    }
     setUploading(true);
     try {
       const fd = new FormData();
@@ -312,9 +316,9 @@ export function Datasources() {
     {
       key: 'csv', icon: <FileTextOutlined style={{ fontSize: 28, color: '#5645D4' }} />,
       color: '#5645D4', bg: 'linear-gradient(135deg,#ECE7F8,#DCD2F5)',
-      title: '上传数据文件', desc: 'CSV / Excel / Parquet，自动识别字段与语义包',
+      title: '上传数据文件', desc: 'CSV / Excel / JSON / Parquet，自动识别字段与语义包',
       action: (
-        <Upload accept=".csv,.xlsx,.xls,.parquet" showUploadList={false} customRequest={doUpload}>
+        <Upload accept=".csv,.tsv,.xlsx,.xls,.json,.parquet" showUploadList={false} customRequest={doUpload}>
           <Button type="primary" block loading={uploading} icon={<CloudUploadOutlined />}>上传文件</Button>
         </Upload>
       ),

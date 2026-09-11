@@ -8,6 +8,7 @@ FineBI NEXT Skill 思路的轻量实现：验证过的分析路径沉淀为可�
 import re
 import time
 import uuid
+from pathlib import Path
 
 from app.sandbox import run_in_sandbox
 from backend.db import SessionLocal
@@ -125,7 +126,8 @@ def run_skill(skill_pk: int, session_id: int | None, data_source_ids: list[int],
                 ds = db.get(DataSource, ds_id)
                 if ds:
                     columns_now.update(jload(ds.columns_json, []))
-            replay = _columns_match(jload(skill.columns_json, []), columns_now)
+            replay = (_columns_match(jload(skill.columns_json, []), columns_now)
+                      and _reader_compatible(skill.code, list(files)))
 
             emit("step", {"node": "skill", "label": f"运行 Skill「{skill.name}」",
                           "status": "running", "detail": "重放已验证代码" if replay else "参考案例重新生成"})
@@ -176,9 +178,7 @@ def _create_run(db, session_id, question, data_source_ids, skill_id) -> int:
 
 def _replay(db, skill, session_id, data_source_ids, files, emit, t0) -> dict:
     """列匹配 → 直接重放代码（不经过 LLM）。"""
-    code = skill.code
-    first_name = next(iter(files)) if files else ""
-    code = code.replace(f"/data/{PLACEHOLDER}", f"/data/{first_name}")
+    code = _normalize_data_paths(skill.code, files)
 
     run_pk = _create_run(db, session_id, skill.question, data_source_ids, skill.id)
     run_id = f"skill-{uuid.uuid4().hex[:8]}"
@@ -242,7 +242,8 @@ def _build_files(db, data_source_ids) -> dict[str, str]:
                 db.commit()
             files[f"{ds.materialized_table}.parquet"] = ds.materialized_path
         else:
-            files[ds.name] = ds.file_path
+            # 与 analysis_runner._prepare 一致：真实存储文件名（含扩展名）
+            files[ds.file_name or Path(ds.file_path).name] = ds.file_path
     if not files:
         raise ValueError("未找到有效数据源")
     return files
@@ -253,3 +254,39 @@ def _columns_match(skill_columns: list[str], current_columns: set[str]) -> bool:
     if not skill_columns:
         return False
     return set(skill_columns).issubset(current_columns)
+
+
+_READER_EXTS = {
+    "read_csv": {".csv", ".tsv", ".txt"},
+    "read_table": {".csv", ".tsv", ".txt"},
+    "read_excel": {".xlsx", ".xls"},
+    "read_json": {".json", ".jsonl"},
+    "read_parquet": {".parquet"},
+    "read_fwf": {".txt"},
+}
+
+
+def _reader_compatible(code: str, mount_names: list[str]) -> bool:
+    """Skill 代码用的 pandas 读取函数与当前挂载文件的扩展名兼容才可重放。"""
+    exts = {Path(n).suffix.lower() for n in mount_names}
+    for reader in set(re.findall(r"pd\.(read_\w+)", code)):
+        allowed = _READER_EXTS.get(reader)
+        if allowed is not None and not exts & allowed:
+            return False
+    return True
+
+
+def _normalize_data_paths(code: str, files: dict[str, str]) -> str:
+    """把代码里的 /data/ 路径归一化到当前挂载文件名。
+
+    先替换 {name} 占位符；再清理旧版 Skill 中残留的旧文件名（如历史
+    display name），避免挂载名变更后重放找不到文件。
+    """
+    first = next(iter(files), "")
+    code = code.replace(f"/data/{PLACEHOLDER}", f"/data/{first}")
+
+    def _sub(match: re.Match) -> str:
+        token = match.group(1)
+        return match.group(0) if token in files else f"/data/{first}"
+
+    return re.sub(r"/data/([^\"'\s\)]+)", _sub, code)

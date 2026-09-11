@@ -112,6 +112,9 @@ class DataSource(Base):
     type: Mapped[str] = mapped_column(String(8))  # file | db
     # file 源
     file_path: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # 沙箱挂载用真实存储文件名（含扩展名），让生成代码能选对读取函数
+    file_name: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    file_type: Mapped[str | None] = mapped_column(String(16), nullable=True)  # csv|tsv|xlsx|xls|parquet|json|jsonl
     size_bytes: Mapped[int | None] = mapped_column(Integer, nullable=True)
     # db 源
     db_type: Mapped[str | None] = mapped_column(String(16), nullable=True)  # sqlite|mysql|postgresql
@@ -136,7 +139,8 @@ class DataSource(Base):
     def to_dict(self) -> dict:
         return {
             "id": self.id, "name": self.name, "type": self.type,
-            "file_path": self.file_path, "size_bytes": self.size_bytes,
+            "file_path": self.file_path, "file_name": self.file_name,
+            "file_type": self.file_type, "size_bytes": self.size_bytes,
             "db_type": self.db_type, "host": self.host, "port": self.port,
             "database_name": self.database_name, "username": self.username,
             "pack_id": self.pack_id, "columns": jload(self.columns_json, []),

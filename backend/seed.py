@@ -149,11 +149,18 @@ def _seed_data_sources(db: Session) -> None:
 
     from app.config import PROJECT_ROOT
 
-    # 回填历史空 row_count（文件型）
+    # 回填历史空 row_count（文件型）；补齐旧数据的 file_name / file_type
     for ds in db.query(DataSource).filter(
             DataSource.type == "file", DataSource.row_count.is_(None)).all():
         if ds.file_path and Path(ds.file_path).exists():
             ds.row_count = count_rows(ds.file_path)
+    for ds in db.query(DataSource).filter(
+            DataSource.type == "file", DataSource.file_name.is_(None)).all():
+        if ds.file_path:
+            from backend.services.datasource import detect_file_type
+
+            ds.file_name = Path(ds.file_path).name
+            ds.file_type = detect_file_type(ds.file_path)
 
     if db.query(DataSource).filter(DataSource.builtin == True).count():  # noqa: E712
         return
@@ -168,8 +175,11 @@ def _seed_data_sources(db: Session) -> None:
             continue
         columns = read_columns(str(dest))
         assign_pack(filename, pack_id)
+        from backend.services.datasource import detect_file_type
+
         db.add(DataSource(
             name=filename, type="file", file_path=str(dest),
+            file_name=dest.name, file_type=detect_file_type(str(dest)),
             size_bytes=dest.stat().st_size, pack_id=pack_id,
             columns_json=_jdump(columns), builtin=True,
             row_count=count_rows(str(dest)),

@@ -7,20 +7,21 @@ from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
 from sqlalchemy.orm import Session
 
 from app.semantic import assign_pack, infer_pack, list_packs, load_pack
-from backend.config import UPLOADS_DIR
+from backend.config import MAX_UPLOAD_MB, UPLOADS_DIR
 from backend.db import get_db
 from backend.models import DataSource
 from backend.schemas import (
     DataSourceDbCreate, DataSourcePatch, DbTestBody, MaterializeBody,
 )
 from backend.services.datasource import (
-    count_rows, list_tables, materialize, preview, read_columns, test_connection,
+    count_rows, detect_file_type, list_tables, materialize, preview,
+    read_columns, test_connection,
 )
 from backend.models import jdump
 
 router = APIRouter(prefix="/datasources")
 
-ALLOWED_EXT = {".csv", ".xlsx", ".xls", ".parquet"}
+ALLOWED_EXT = {".csv", ".tsv", ".xlsx", ".xls", ".json", ".parquet"}
 
 
 @router.post("/upload")
@@ -29,12 +30,25 @@ async def upload_file(file: UploadFile = File(...), name: str = Form(""),
     original = file.filename or "upload.csv"
     suffix = Path(original).suffix.lower()
     if suffix not in ALLOWED_EXT:
-        raise HTTPException(400, f"不支持的文件类型 {suffix}，仅支持 csv/xlsx/parquet")
+        raise HTTPException(400, f"不支持的文件类型 {suffix}，仅支持 csv/tsv/xlsx/xls/json/parquet")
 
     display_name = name.strip() or original
     dest = UPLOADS_DIR / f"{uuid.uuid4().hex[:8]}_{original}"
-    content = await file.read()
-    dest.write_bytes(content)
+    size_bytes = 0
+    max_bytes = MAX_UPLOAD_MB * 1024 * 1024
+    try:
+        with dest.open("wb") as out:
+            while chunk := await file.read(1024 * 1024):
+                size_bytes += len(chunk)
+                if size_bytes > max_bytes:
+                    raise HTTPException(413, f"文件超过大小限制 {MAX_UPLOAD_MB}MB")
+                out.write(chunk)
+    except Exception:
+        dest.unlink(missing_ok=True)
+        raise
+    if size_bytes == 0:
+        dest.unlink(missing_ok=True)
+        raise HTTPException(400, "空文件")
 
     try:
         columns = read_columns(str(dest))
@@ -46,7 +60,8 @@ async def upload_file(file: UploadFile = File(...), name: str = Form(""),
     assign_pack(display_name, pack_id)
     obj = DataSource(
         name=display_name, type="file", file_path=str(dest),
-        size_bytes=len(content), pack_id=pack_id, columns_json=jdump(columns),
+        file_name=dest.name, file_type=detect_file_type(str(dest)),
+        size_bytes=size_bytes, pack_id=pack_id, columns_json=jdump(columns),
         row_count=count_rows(str(dest)),
     )
     db.add(obj)

@@ -4,6 +4,8 @@
 与上传文件一样以文件形式进入沙箱 /data —— 这是内核结果契约的硬约束。
 """
 
+import csv
+import json
 import math
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -68,7 +70,7 @@ def preview(ds: DataSource, table: str | None = None, limit: int = 50) -> dict:
     """db 源预览表；file 源预览文件前 limit 行。"""
     if ds.type == "file":
         df = _read_file(ds.file_path).head(limit)
-        return {"columns": list(df.columns), "rows": df.to_dict("records")}
+        return {"columns": list(df.columns), "rows": _clean_rows(df)}
     eng = build_engine(ds)
     df = pd.read_sql_query(f'SELECT * FROM "{table}"', eng).head(limit)
     return {"columns": list(df.columns), "rows": _clean_rows(df)}
@@ -140,16 +142,30 @@ def read_columns(path: str) -> list[str]:
 
 
 def count_rows(path: str) -> int:
-    """轻量行数统计（csv 按字节流计数，excel/parquet 用 pandas）。"""
-    suffix = str(path).lower()
+    """轻量行数统计：csv/tsv 字节流计数；parquet/xlsx 读元数据；json 解析计数。"""
+    suffix = Path(str(path)).suffix.lower()
     try:
-        if suffix.endswith(".csv"):
+        if suffix in (".csv", ".tsv"):
             with open(path, "rb") as f:
                 return max(sum(1 for _ in f) - 1, 0)
-        if suffix.endswith((".xlsx", ".xls")):
-            return int(len(pd.read_excel(path)))
-        if suffix.endswith(".parquet"):
-            return int(len(pd.read_parquet(path)))
+        if suffix in (".xlsx", ".xls"):
+            from openpyxl import load_workbook
+
+            wb = load_workbook(path, read_only=True)
+            try:
+                return max((wb.active.max_row or 1) - 1, 0)
+            finally:
+                wb.close()
+        if suffix == ".parquet":
+            import pyarrow.parquet as pq
+
+            return int(pq.ParquetFile(path).metadata.num_rows)
+        if suffix == ".jsonl":
+            with open(path, "rb") as f:
+                return sum(1 for _ in f)
+        if suffix == ".json":
+            data = json.loads(Path(path).read_text(encoding="utf-8"))
+            return len(data) if isinstance(data, list) else 1
     except Exception:
         return 0
     return 0
@@ -157,15 +173,65 @@ def count_rows(path: str) -> int:
 
 # ---- 内部工具 ----
 
+def detect_encoding_and_sep(path: str) -> tuple[str, str]:
+    """嗅探 CSV/TSV 的编码与分隔符（4KB 样本；嗅探失败回退逗号）。"""
+    raw = Path(path).read_bytes()[:4096]
+    encoding = "latin-1"
+    for enc in ("utf-8-sig", "gb18030"):
+        try:
+            raw.decode(enc)
+            encoding = enc
+            break
+        except UnicodeDecodeError:
+            continue
+    sep = ","
+    try:
+        sep = csv.Sniffer().sniff(raw.decode(encoding), delimiters=",;\t|").delimiter
+    except Exception:
+        pass
+    return encoding, sep
+
+
+def detect_file_type(path: str) -> str:
+    """扩展名归一化为文件类型标签；.json 区分 records 数组与 NDJSON。"""
+    suffix = Path(str(path)).suffix.lower()
+    if suffix == ".json":
+        try:
+            json.loads(Path(path).read_text(encoding="utf-8"))
+            return "json"
+        except Exception:
+            return "jsonl"
+    return {".csv": "csv", ".tsv": "tsv", ".txt": "csv", ".xlsx": "xlsx",
+            ".xls": "xls", ".parquet": "parquet", ".jsonl": "jsonl"}.get(suffix, "csv")
+
+
 def _read_file(path: str, nrows: int | None = None) -> pd.DataFrame:
-    suffix = str(path).lower()
-    if suffix.endswith((".xlsx", ".xls")):
-        return pd.read_excel(path, nrows=nrows)
-    if suffix.endswith(".parquet"):
+    suffix = Path(str(path)).suffix.lower()
+    if suffix == ".parquet":
         # parquet 不支持 nrows，读全量后截断
         df = pd.read_parquet(path)
         return df.head(nrows) if nrows else df
-    return pd.read_csv(path, nrows=nrows)
+    if suffix in (".xlsx", ".xls"):
+        return pd.read_excel(path, nrows=nrows)
+    if suffix in (".json", ".jsonl"):
+        return _read_json_file(path)
+    encoding, sep = detect_encoding_and_sep(path)
+    return pd.read_csv(path, encoding=encoding, sep=sep, nrows=nrows)
+
+
+def _read_json_file(path: str) -> pd.DataFrame:
+    """records 数组优先，失败按 NDJSON 读；对象/数组列展开成平面列。"""
+    try:
+        df = pd.read_json(path)
+    except ValueError:
+        df = pd.read_json(path, lines=True)
+    obj_cols = [
+        c for c in df.columns
+        if df[c].dtype == object and df[c].map(lambda v: isinstance(v, (dict, list))).any()
+    ]
+    if obj_cols:
+        df = pd.json_normalize(df.to_dict("records"))
+    return df
 
 
 def _clean_rows(df: pd.DataFrame) -> list[dict]:

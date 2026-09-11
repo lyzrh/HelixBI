@@ -5,7 +5,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         fonts-wqy-zenhei \
     && rm -rf /var/lib/apt/lists/*
 
-RUN pip install --no-cache-dir pandas numpy matplotlib openpyxl pyarrow
+RUN pip install --no-cache-dir pandas numpy matplotlib openpyxl pyarrow xlrd
 
 COPY dahelper.py /usr/local/lib/python3.11/site-packages/dahelper.py
 
