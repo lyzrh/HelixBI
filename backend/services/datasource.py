@@ -174,19 +174,32 @@ def count_rows(path: str) -> int:
 # ---- 内部工具 ----
 
 def detect_encoding_and_sep(path: str) -> tuple[str, str]:
-    """嗅探 CSV/TSV 的编码与分隔符（4KB 样本；嗅探失败回退逗号）。"""
+    """嗅探 CSV/TSV 的编码与分隔符（4KB 样本；嗅探失败回退逗号）。
+
+    样本可能在多字节字符中间截断（如第 4096 字节切进一个 UTF-8 汉字），
+    使合法 UTF-8/GBK 文件解码失败而误判 latin-1——因此逐级修剪末尾
+    至多 3 字节（单字符最大长度）再试。
+    """
     raw = Path(path).read_bytes()[:4096]
+
+    def decodable(enc: str) -> bool:
+        for trim in range(4):
+            try:
+                raw[: len(raw) - trim].decode(enc)
+                return True
+            except UnicodeDecodeError:
+                continue
+        return False
+
     encoding = "latin-1"
     for enc in ("utf-8-sig", "gb18030"):
-        try:
-            raw.decode(enc)
+        if decodable(enc):
             encoding = enc
             break
-        except UnicodeDecodeError:
-            continue
     sep = ","
     try:
-        sep = csv.Sniffer().sniff(raw.decode(encoding), delimiters=",;\t|").delimiter
+        sample = raw.decode(encoding, errors="ignore")
+        sep = csv.Sniffer().sniff(sample, delimiters=",;\t|").delimiter
     except Exception:
         pass
     return encoding, sep

@@ -62,6 +62,33 @@ def test_detect_encoding_and_sep_tsv(tsv_file):
     assert sep == "\t"
 
 
+def test_utf8_csv_boundary_truncated_sample(tmp_path):
+    """4KB 嗅探样本末尾切进一个 3 字节 UTF-8 汉字中间，不得误判编码。"""
+    header = "订单,区域\n"
+    pad = "x" * (4094 - len(header.encode("utf-8")))  # 汉字起点在字节 4094
+    content = (header + pad + "汉,1\n" + header + "西,2\n").encode("utf-8")
+    p = tmp_path / "boundary_utf8.csv"
+    p.write_bytes(content)
+
+    encoding, sep = detect_encoding_and_sep(str(p))
+    assert encoding == "utf-8-sig"
+    assert sep == ","
+    assert list(_read_file(str(p)).columns) == ["订单", "区域"]
+
+
+def test_gbk_csv_boundary_truncated_sample(tmp_path):
+    """4KB 嗅探样本末尾只余 GBK 汉字首字节：旧逻辑会落到 latin-1 乱码。"""
+    header = "订单,区域\n"
+    pad = "x" * (4095 - len(header.encode("gb18030")))  # 汉字起点在字节 4095
+    content = (header + pad + "汉,1\n" + header + "西,2\n").encode("gb18030")
+    p = tmp_path / "boundary_gbk.csv"
+    p.write_bytes(content)
+
+    encoding, sep = detect_encoding_and_sep(str(p))
+    assert encoding == "gb18030"
+    assert list(_read_file(str(p)).columns) == ["订单", "区域"]
+
+
 def test_detect_file_type_json(json_records, jsonl_file):
     assert detect_file_type(json_records) == "json"
     assert detect_file_type(jsonl_file) == "jsonl"
