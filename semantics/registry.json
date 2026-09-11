@@ -1,5 +1,4 @@
 {
   "sample_sales.csv": "retail_sales",
-  "sample_production.csv": "manufacturing_production",
-  "e2e_test_upload.csv": "retail_sales"
+  "sample_production.csv": "manufacturing_production"
 }

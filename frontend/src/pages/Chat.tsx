@@ -293,7 +293,7 @@ export function Chat() {
                   steps={[
                     {
                       title: '连接数据源',
-                      desc: '上传 CSV / Excel / Parquet，或连接 MySQL / PostgreSQL 并物化为缓存',
+                      desc: '上传 CSV / Excel / JSON / Parquet，或连接 MySQL / PostgreSQL 并物化为缓存',
                       action: <Button size="small" icon={<DatabaseOutlined />} onClick={() => navigate('/datasources')}>去连接</Button>,
                     },
                     {
