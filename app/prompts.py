@@ -5,6 +5,10 @@ GENERATE_SYSTEM = """你是资深数据分析师，负责根据用户问题编�
 - 对比类问题（含 compare 或"为什么/原因"）：除总量外，按主要维度拆解差值贡献（各组前后差值及占比），回答"变化由谁驱动"
 - 派生指标（如客单价/良率）按语义层公式先聚合再计算
 
+【数据锚定（防幻觉）】
+- 只能使用「数据概况」中列出的列名和「可用文件」清单中的文件名，禁止编造或猜测任何列名、文件名、工作表名
+- 读取函数必须与文件格式提示一致（csv→read_csv、xlsx→read_excel、json→read_json、parquet→read_parquet）
+
 可用环境（沙箱内已预装，不得安装其他库、不得访问网络）：
 - python 3.11, pandas, numpy, matplotlib, openpyxl, pyarrow
 - 数据文件在 /data/ 目录下，文件名与提供的清单一致
@@ -41,6 +45,28 @@ PARSE_SYSTEM = """你是 BI 语义解析器。把用户的自然语言问题解�
 无法确定的字段留空数组/null，不要编造语义层不存在的名称。"""
 
 
+from pathlib import Path
+
+_READER_HINTS = {
+    ".csv": "pd.read_csv",
+    ".tsv": 'pd.read_csv(sep="\\t")',
+    ".xlsx": "pd.read_excel",
+    ".xls": "pd.read_excel",
+    ".json": "pd.read_json",
+    ".jsonl": "pd.read_json（lines=True）",
+    ".parquet": "pd.read_parquet",
+}
+
+
+def file_list_block(file_names: list[str]) -> str:
+    """可用文件清单，按扩展名附读取函数提示（挂载名即真实文件名）。"""
+    lines = []
+    for n in file_names:
+        hint = _READER_HINTS.get(Path(n).suffix.lower())
+        lines.append(f"- {n}（请用 {hint} 读取）" if hint else f"- {n}")
+    return "\n".join(lines) if lines else "（无）"
+
+
 def generate_user_prompt(
     question: str,
     profile: str,
@@ -57,7 +83,7 @@ def generate_user_prompt(
 {profile}
 
 ## 可用文件（/data/ 下）
-{chr(10).join(f'- {n}' for n in file_names)}
+{file_list_block(file_names)}
 
 ## 用户问题
 {question}
@@ -83,17 +109,21 @@ FIX_USER_TMPL = """上一次执行的代码失败或结果不完整，请修复�
 {stderr}
 ```
 
-请分析错误原因，输出修复后的完整代码（格式要求不变：计划 + ```python 代码块）。"""
+## 可用文件（/data/ 下，真实文件名）
+{files_block}
+
+请分析错误原因，输出修复后的完整代码（格式要求不变：计划 + ```python 代码块）。若错误与列名有关（如 KeyError），请对照「数据概况」与语义层检查列名的拼写、大小写与前后空格。"""
 
 
 SUMMARIZE_SYSTEM = """你是数据分析助手，负责把沙箱执行结果整理成给用户看的中文结论。
 
 要求：
-1. 直接回答用户的问题，先给结论再给依据，关键数字必须来自执行结果，不得编造
-2. 结果中有表格时，可用 Markdown 表格呈现最重要的一个
-3. 结果中有图表时，提示用户查看图表
-4. 如果执行失败，如实说明失败原因，不要给出未经计算验证的数字
-5. 200 字以内为宜"""
+1. 直接回答用户的问题，先给结论再给依据
+2. 结论里的每一个数字都必须能在执行结果 JSON（tables/text）中找到原值，结果里没有的数字一律不写
+3. 结果中有表格时，可用 Markdown 表格呈现最重要的一个
+4. 结果中有图表时，提示用户查看图表
+5. 如果执行失败，如实说明失败原因，不要给出未经计算验证的数字
+6. 200 字以内为宜"""
 
 FOLLOWUP_SYSTEM = """根据刚才的数据分析对话，向用户推荐 3 个最有价值的后续分析问题。
 

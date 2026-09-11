@@ -5,6 +5,8 @@ the reliability core identified in the research (OpenCodeInterpreter /
 PandasAI lessons).
 """
 
+import json
+import logging
 import re
 import uuid
 from typing import Any, TypedDict
@@ -17,6 +19,8 @@ from . import config, prompts
 from .config import MAX_FIX_ATTEMPTS
 from .profiler import profile_all
 from .sandbox import SandboxResult, run_in_sandbox
+
+logger = logging.getLogger(__name__)
 
 _llm = None
 
@@ -124,7 +128,7 @@ def reset_llm() -> None:
 
 class AgentState(TypedDict):
     question: str
-    files: dict[str, str]  # display-name -> host path
+    files: dict[str, str]  # 真实存储文件名（含扩展名）-> host path
     profile: str
     semantic_block: str  # 行业语义层 prompt 块
     skill_block: str  # Skill few-shot 注入块（空字符串时行为与原版完全一致）
@@ -148,7 +152,7 @@ def _history_block(history: list[dict[str, str]] | None) -> str:
     lines = ["## 之前的对话（供参考，新问题可能延续这些结论）"]
     for turn in turns:
         answer = (turn.get("answer") or "").strip()
-        lines.append(f"- 问：{turn.get('question', '')}\n  答要旨：{answer[:200]}")
+        lines.append(f"- 问：{turn.get('question', '')}\n  答要旨：{answer[:600]}")
     return "\n".join(lines) + "\n"
 
 
@@ -157,29 +161,57 @@ def _extract_code(text: str) -> str:
     return match.group(1).strip() if match else ""
 
 
-def parse_intent(state: AgentState) -> dict:
-    """意图理解：问题 + 语义层 → QuerySpec（FineChatBI 式语义解析）。"""
-    import json as _json
+def _parse_spec_json(content: str) -> dict | None:
+    """从 LLM 输出中提取首个 JSON 对象；失败返回 None。"""
+    match = re.search(r"\{.*\}", content, re.DOTALL)
+    if not match:
+        return None
+    try:
+        return json.loads(match.group(0))
+    except ValueError:
+        return None
 
+
+def parse_intent(state: AgentState) -> dict:
+    """意图理解：问题 + 语义层 + 对话上下文 → QuerySpec（FineChatBI 式语义解析）。"""
     if state.get("spec"):
         return {}  # UI 人工确认过，跳过
     try:
         llm = get_llm()
+        human = (
+            _history_block(state.get("history"))
+            + f"{state.get('semantic_block', '')}\n\n## 用户问题\n{state['question']}"
+        )
         response = llm.invoke(
             [
                 SystemMessage(content=prompts.PARSE_SYSTEM),
-                HumanMessage(
-                    content=f"{state.get('semantic_block', '')}\n\n## 用户问题\n{state['question']}"
-                ),
+                HumanMessage(content=human),
             ]
         )
         content = response.content if isinstance(response.content, str) else str(response.content)
-        match = re.search(r"\{.*\}", content, re.DOTALL)
-        spec = _json.loads(match.group(0)) if match else {}
+        spec = _parse_spec_json(content)
+        if spec is None:
+            logger.warning("parse_intent 输出不是合法 JSON，尝试修复重试")
+            response = llm.invoke(
+                [
+                    SystemMessage(content=prompts.PARSE_SYSTEM),
+                    HumanMessage(
+                        content=human
+                        + f"\n\n## 上次输出（不是合法 JSON）\n{content[:2000]}\n\n"
+                        "请重新输出：只输出合法 JSON，不要任何其他文字。"
+                    ),
+                ]
+            )
+            content = response.content if isinstance(response.content, str) else str(response.content)
+            spec = _parse_spec_json(content)
+        if spec is None:
+            logger.warning("parse_intent JSON 修复重试仍失败，回退为原始问题")
+            spec = {}
         spec.setdefault("rewritten_question", state["question"])
         _log_token_usage(state, "parse_intent", response)
         return {"spec": spec}
-    except Exception:
+    except Exception as exc:
+        logger.warning("parse_intent 失败，回退为原始问题: %s", exc)
         return {"spec": {"rewritten_question": state["question"]}}
 
 
@@ -209,6 +241,7 @@ def generate_code(state: AgentState) -> dict:
                     code=state["code"],
                     stdout=execution.get("stdout", ""),
                     stderr=execution.get("stderr", ""),
+                    files_block=prompts.file_list_block(list(files)),
                 )
             )
         )

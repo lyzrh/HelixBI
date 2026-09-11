@@ -82,8 +82,14 @@ def pack_for_file(filename: str, columns: list[str] | None = None) -> str:
     return DEFAULT_PACK
 
 
+def _aliases(entry: dict) -> str:
+    """同义词去掉与指标/维度同名项后拼成别名串。"""
+    names = [s for s in entry.get("synonyms", []) if s != entry.get("name")]
+    return f"，别名：{'、'.join(names)}" if names else ""
+
+
 def render_semantic_prompt(pack_id: str) -> str:
-    """把行业包渲染成 prompt 注入块（指标/维度/口径/图表建议）。"""
+    """把行业包渲染成 prompt 注入块（指标/维度/口径/图表建议/示例问题）。"""
     pack = load_pack(pack_id)
     if not pack:
         return ""
@@ -97,12 +103,13 @@ def render_semantic_prompt(pack_id: str) -> str:
         unit = f"，单位 {m['unit']}" if m.get("unit") else ""
         lines.append(f"  - {m['name']}（{src}{unit}）"
                      + (f"，计算：{m['formula']}" if m.get("formula") else "")
+                     + _aliases(m)
                      + (f"。{m['note']}" if m.get("note") else ""))
     lines.append("- 维度：")
     for d in pack.get("dimensions", []):
         if d.get("optional") and not d.get("_present"):
             continue
-        lines.append(f"  - {d['name']}（字段 `{d['field']}`）")
+        lines.append(f"  - {d['name']}（字段 `{d['field']}`）" + _aliases(d))
     hints = pack.get("domain_hints", "").strip()
     if hints:
         lines.append(f"- 业务口径：{hints}")
@@ -110,6 +117,9 @@ def render_semantic_prompt(pack_id: str) -> str:
     if chart:
         pairs = "；".join(f"{k}→{v}" for k, v in chart.items())
         lines.append(f"- 图表建议：{pairs}")
+    examples = [q for q in pack.get("example_questions", []) if q][:3]
+    if examples:
+        lines.append("- 示例问题：" + " / ".join(examples))
     return "\n".join(lines)
 
 
