@@ -25,8 +25,7 @@ FastAPI (backend/, :8000)
 - **单向依赖**：`backend/` → `app/`；禁止 `app/` 反向 import `backend/`；前端只通过 HTTP/SSE 与后端通信。
 - **产物路径约定**：分析产物写 `runs/{run_id}/out`（result.json + PNG），由后端静态挂载 `/runs` 提供访问。
 - **语义包是口径唯一来源**：新增指标/维度先改 `semantics/*.yaml`，再考虑代码；不要在 prompt 或业务代码里硬编码指标定义。
-- **元数据库迁移**：改表结构需同步 `backend/models.py`、`backend/schemas.py`，并确认 `backend/seed.py` 的内置数据兼容。
-- 旧 Streamlit UI（`app/ui/app.py`，:8501）保留可独立运行，改动内核时不得破坏它。
+- **元数据库迁移**：改表结构需同步 `backend/models.py`、`backend/schemas.py`，新列在 `backend/db.py:_migrate` 补 ALTER TABLE，并在 `backend/seed.py` 回填存量数据。
 
 ## 历史决策
 

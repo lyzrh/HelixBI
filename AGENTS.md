@@ -35,8 +35,8 @@ pip install -r requirements.txt
 
 | 目录 | 职责 |
 | --- | --- |
-| `app/` | LangGraph 内核：`graph.py`（parse_intent → generate_code → execute 自修复 → summarize → followup）、`sandbox.py`、`semantic.py`、`prompts.py`、`report.py`；`app/ui/` 为旧 Streamlit UI |
-| `backend/` | FastAPI 服务：`routers/`（analysis/sessions/datasources/agents/skills/insights/dashboards/explore/settings/usage/misc）、`services/`（analysis_runner/skill_engine/insight_engine/insight_scheduler/datasource/report_export）、`models.py`/`schemas.py`/`seed.py` |
+| `app/` | LangGraph 内核：`graph.py`（parse_intent → generate_code → execute 自修复 → summarize → followup）、`sandbox.py`、`semantic.py`、`prompts.py`、`report.py` |
+| `backend/` | FastAPI 服务：`routers/`（analysis/sessions/datasources/agents/skills/insights/dashboards/explore/settings/usage/misc）、`services/`（analysis_runner/skill_engine/insight_engine/insight_scheduler/datasource/explore_engine/report_export）、`models.py`/`schemas.py`/`seed.py` |
 | `frontend/` | React 18 + AntD 5 + Zustand + Vite；`src/pages/` 与 `src/stores/`（chatStore 为 SSE 状态机） |
 | `semantics/` | 行业语义包 YAML（retail_sales / manufacturing_production） |
 | `sandbox/` | 沙箱镜像（pandas/pyarrow/matplotlib/CJK 字体 + dahelper 结果契约） |

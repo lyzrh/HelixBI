@@ -157,3 +157,31 @@ class ExportSheet(BaseModel):
 class ExportTableBody(BaseModel):
     filename: str = "导出数据"
     sheets: list[ExportSheet] = Field(min_length=1)
+
+
+# ---- 自助分析（Explore）----
+class Metric(BaseModel):
+    field: str
+    agg: str = "sum"
+
+
+class FilterCond(BaseModel):
+    field: str
+    op: str
+    value: object = None
+
+
+class ExploreBody(BaseModel):
+    data_source_id: int
+    dimensions: list[str] = Field(default_factory=list)
+    metrics: list[Metric] = Field(default_factory=list)
+    filters: list[FilterCond] = Field(default_factory=list)
+    date_grain: str | None = None  # day / month（日期维度粒度）
+    sort_field: str | None = None
+    sort_order: str = "desc"
+    limit: int = 100
+
+
+class SqlBody(BaseModel):
+    data_source_id: int
+    sql: str = Field(min_length=1, max_length=4000)
