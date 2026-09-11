@@ -24,15 +24,34 @@ router = APIRouter(prefix="/datasources")
 ALLOWED_EXT = {".csv", ".tsv", ".xlsx", ".xls", ".json", ".parquet"}
 
 
+def _decode_form_text(value: str) -> str:
+    """回收 multipart 表单字段乱码。
+
+    python-multipart 对非 UTF-8 字节（如 Windows 控制台 curl 以 GBK 发送中文）
+    会按 latin-1 逐字节解码成乱码；浏览器路径始终是 UTF-8，不受影响。
+    这里把 latin-1 可逆的字节按 utf-8/gb18030 依次回收，失败保持原值。
+    """
+    try:
+        raw = value.encode("latin-1")
+    except UnicodeEncodeError:
+        return value  # 含 latin-1 之外的字符：已按 UTF-8 正确解码
+    for enc in ("utf-8", "gb18030"):
+        try:
+            return raw.decode(enc)
+        except UnicodeDecodeError:
+            continue
+    return value
+
+
 @router.post("/upload")
 async def upload_file(file: UploadFile = File(...), name: str = Form(""),
                       db: Session = Depends(get_db)):
-    original = file.filename or "upload.csv"
+    original = _decode_form_text(file.filename or "upload.csv")
     suffix = Path(original).suffix.lower()
     if suffix not in ALLOWED_EXT:
         raise HTTPException(400, f"不支持的文件类型 {suffix}，仅支持 csv/tsv/xlsx/xls/json/parquet")
 
-    display_name = name.strip() or original
+    display_name = _decode_form_text(name).strip() or original
     dest = UPLOADS_DIR / f"{uuid.uuid4().hex[:8]}_{original}"
     size_bytes = 0
     max_bytes = MAX_UPLOAD_MB * 1024 * 1024
