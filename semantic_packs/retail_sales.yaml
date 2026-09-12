@@ -34,7 +34,7 @@ dimensions:
     synonyms: [品类, 产品类别, 类目, 品类名称]
   - name: 区域
     field: 区域
-    synonyms: [区域, 大区, 销售区域]
+    synonyms: [区域, 大区, 销售区域, 地区, 片区]
   - name: 门店
     field: 门店
     synonyms: [门店, 店铺, 门店名称]

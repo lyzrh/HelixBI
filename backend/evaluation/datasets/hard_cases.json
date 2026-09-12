@@ -1,0 +1,24 @@
+{
+  "_meta": {
+    "version": 1,
+    "taxonomy": "analysis_type 判定优先级：yoy_comparison | mom_comparison > ranking > trend > breakdown > aggregate",
+    "notes": "对抗样例：口语化表达、未登记的同义词、非标准时间说法。期望值仍是「人读出来的正确意图」。这一组的作用是暴露语义包词表与时间解析的真实覆盖缺口——标准表述上的高准确率不能代表实际用户表达。每条 case 自带 pack。"
+  },
+  "cases": [
+    {"id": "hard_001", "pack": "retail_sales", "question": "华东地区的营收是多少？", "expected": {"metrics": ["销售额"], "dimensions": ["区域"], "comparison": "none", "analysis_type": "aggregate"}},
+    {"id": "hard_002", "pack": "retail_sales", "question": "客单最高的门店是哪家？", "expected": {"metrics": ["客单价"], "dimensions": ["门店"], "comparison": "none", "analysis_type": "ranking"}},
+    {"id": "hard_003", "pack": "retail_sales", "question": "上个月哪个大区的客单价掉得最厉害？", "expected": {"metrics": ["客单价"], "dimensions": ["区域"], "comparison": "none", "analysis_type": "ranking"}},
+    {"id": "hard_004", "pack": "retail_sales", "question": "哪些品类卖得最好？", "expected": {"metrics": [], "dimensions": ["品类"], "comparison": "none", "analysis_type": "ranking"}},
+    {"id": "hard_005", "pack": "retail_sales", "question": "近半年的销售走势", "expected": {"metrics": ["销售额"], "dimensions": [], "comparison": "none", "analysis_type": "trend"}},
+    {"id": "hard_006", "pack": "retail_sales", "question": "同比看，各渠道销售额表现如何", "expected": {"metrics": ["销售额"], "dimensions": ["渠道"], "comparison": "yoy", "analysis_type": "yoy_comparison"}},
+    {"id": "hard_007", "pack": "retail_sales", "question": "把销售额拆到区域和品类看看", "expected": {"metrics": ["销售额"], "dimensions": ["区域", "品类"], "comparison": "none", "analysis_type": "breakdown"}},
+    {"id": "hard_008", "pack": "retail_sales", "question": "订单量有多少？", "expected": {"metrics": ["订单数"], "dimensions": [], "comparison": "none", "analysis_type": "aggregate"}},
+    {"id": "hard_009", "pack": "manufacturing_production", "question": "各产线的产出情况", "expected": {"metrics": ["实际产量"], "dimensions": ["产线"], "comparison": "none", "analysis_type": "breakdown"}},
+    {"id": "hard_010", "pack": "manufacturing_production", "question": "良品率不达标的产线有哪些？", "expected": {"metrics": ["良率"], "dimensions": ["产线"], "comparison": "none", "analysis_type": "breakdown"}},
+    {"id": "hard_011", "pack": "manufacturing_production", "question": "哪条线体的停机时间最久？", "expected": {"metrics": ["停机时长"], "dimensions": ["产线"], "comparison": "none", "analysis_type": "ranking"}},
+    {"id": "hard_012", "pack": "manufacturing_production", "question": "计划达成情况如何？", "expected": {"metrics": ["达成率"], "dimensions": [], "comparison": "none", "analysis_type": "aggregate"}},
+    {"id": "hard_013", "pack": "manufacturing_production", "question": "次品最多的产品是哪个？", "expected": {"metrics": ["不良数"], "dimensions": ["产品"], "comparison": "none", "analysis_type": "ranking"}},
+    {"id": "hard_014", "pack": "manufacturing_production", "question": "近一个月的产出趋势", "expected": {"metrics": ["实际产量"], "dimensions": [], "comparison": "none", "analysis_type": "trend"}},
+    {"id": "hard_015", "pack": "manufacturing_production", "question": "各工站的合格率对比", "expected": {"metrics": ["良率"], "dimensions": ["工序"], "comparison": "none", "analysis_type": "breakdown"}}
+  ]
+}

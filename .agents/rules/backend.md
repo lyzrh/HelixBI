@@ -31,3 +31,5 @@ pytest -q
 ```
 
 改完后端后至少验证：服务能启动、种子数据可加载（首次运行 seed）、相关 router 的冒烟请求通过、`pytest -q` 全绿。
+
+改了语义解析 / Skill 匹配 / 沙箱链路等影响指标的行为时，额外跑 `python -m backend.evaluation` 看 Evaluation Report（见 `.agents/rules/architecture.md` 的指标门禁条目）。

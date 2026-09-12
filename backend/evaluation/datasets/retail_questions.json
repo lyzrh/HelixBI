@@ -1,0 +1,36 @@
+{
+  "_meta": {
+    "pack": "retail_sales",
+    "pack_name": "零售销售",
+    "version": 1,
+    "taxonomy": "analysis_type 判定优先级：yoy_comparison | mom_comparison > ranking > trend > breakdown > aggregate",
+    "notes": "人工标注的期望口径（指标名 / 维度名取语义包 canonical name）。用于离线度量语义解析与规划契约的准确率，不依赖 LLM 与 Docker。"
+  },
+  "cases": [
+    {"id": "retail_001", "question": "各品类的总销售额是多少？按从高到低排序", "expected": {"metrics": ["销售额"], "dimensions": ["品类"], "comparison": "none", "analysis_type": "ranking"}},
+    {"id": "retail_002", "question": "近30天销售额的周趋势如何？计算环比", "expected": {"metrics": ["销售额"], "dimensions": [], "comparison": "mom", "analysis_type": "mom_comparison"}},
+    {"id": "retail_003", "question": "哪个区域的客单价最高？", "expected": {"metrics": ["客单价"], "dimensions": ["区域"], "comparison": "none", "analysis_type": "ranking"}},
+    {"id": "retail_004", "question": "销售额最高的10家门店", "expected": {"metrics": ["销售额"], "dimensions": ["门店"], "comparison": "none", "analysis_type": "ranking"}},
+    {"id": "retail_005", "question": "今年华东地区销售额同比下降了多少？", "expected": {"metrics": ["销售额"], "dimensions": ["区域"], "comparison": "yoy", "analysis_type": "yoy_comparison"}},
+    {"id": "retail_006", "question": "各渠道的销量分别是多少？", "expected": {"metrics": ["销量"], "dimensions": ["渠道"], "comparison": "none", "analysis_type": "breakdown"}},
+    {"id": "retail_007", "question": "本月总销售额", "expected": {"metrics": ["销售额"], "dimensions": [], "comparison": "none", "analysis_type": "aggregate"}},
+    {"id": "retail_008", "question": "上月各品类的销售额环比变化", "expected": {"metrics": ["销售额"], "dimensions": ["品类"], "comparison": "mom", "analysis_type": "mom_comparison"}},
+    {"id": "retail_009", "question": "各区域的订单量是多少？", "expected": {"metrics": ["订单数"], "dimensions": ["区域"], "comparison": "none", "analysis_type": "breakdown"}},
+    {"id": "retail_010", "question": "近90天销售额的趋势", "expected": {"metrics": ["销售额"], "dimensions": [], "comparison": "none", "analysis_type": "trend"}},
+    {"id": "retail_011", "question": "销售额最低的门店是哪个？", "expected": {"metrics": ["销售额"], "dimensions": ["门店"], "comparison": "none", "analysis_type": "ranking"}},
+    {"id": "retail_012", "question": "各品类的客单价对比", "expected": {"metrics": ["客单价"], "dimensions": ["品类"], "comparison": "none", "analysis_type": "breakdown"}},
+    {"id": "retail_013", "question": "各区域的销售金额有多少？", "expected": {"metrics": ["销售额"], "dimensions": ["区域"], "comparison": "none", "analysis_type": "breakdown"}},
+    {"id": "retail_014", "question": "各品类的销量和销售额分别是多少", "expected": {"metrics": ["销量", "销售额"], "dimensions": ["品类"], "comparison": "none", "analysis_type": "breakdown"}},
+    {"id": "retail_015", "question": "去年销售额是多少？", "expected": {"metrics": ["销售额"], "dimensions": [], "comparison": "none", "analysis_type": "aggregate"}},
+    {"id": "retail_016", "question": "各品类销售额同比增长情况", "expected": {"metrics": ["销售额"], "dimensions": ["品类"], "comparison": "yoy", "analysis_type": "yoy_comparison"}},
+    {"id": "retail_017", "question": "近7天销售额的每日走势", "expected": {"metrics": ["销售额"], "dimensions": [], "comparison": "none", "analysis_type": "trend"}},
+    {"id": "retail_018", "question": "哪个渠道的销售额最高？", "expected": {"metrics": ["销售额"], "dimensions": ["渠道"], "comparison": "none", "analysis_type": "ranking"}},
+    {"id": "retail_019", "question": "上个季度各区域的销售额环比如何？", "expected": {"metrics": ["销售额"], "dimensions": ["区域"], "comparison": "mom", "analysis_type": "mom_comparison"}},
+    {"id": "retail_020", "question": "各门店的客单价排名前十", "expected": {"metrics": ["客单价"], "dimensions": ["门店"], "comparison": "none", "analysis_type": "ranking"}},
+    {"id": "retail_021", "question": "今年各品类的GMV占比", "expected": {"metrics": ["销售额"], "dimensions": ["品类"], "comparison": "none", "analysis_type": "breakdown"}},
+    {"id": "retail_022", "question": "近3个月销售额的环比变化", "expected": {"metrics": ["销售额"], "dimensions": [], "comparison": "mom", "analysis_type": "mom_comparison"}},
+    {"id": "retail_023", "question": "各区域销量占比", "expected": {"metrics": ["销量"], "dimensions": ["区域"], "comparison": "none", "analysis_type": "breakdown"}},
+    {"id": "retail_024", "question": "今年销售额比去年同期增长了多少？", "expected": {"metrics": ["销售额"], "dimensions": [], "comparison": "yoy", "analysis_type": "yoy_comparison"}},
+    {"id": "retail_025", "question": "哪些品类的客单价最低？", "expected": {"metrics": ["客单价"], "dimensions": ["品类"], "comparison": "none", "analysis_type": "ranking"}}
+  ]
+}

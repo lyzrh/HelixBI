@@ -10,7 +10,7 @@ Ask in natural language → the Agent generates analysis code → safe execution
 sandbox → charts / tables / conclusions. Analysis assets are automatically captured as
 Skills, Insights, and Dashboards — **the system gets smarter with every use**.
 
-[Getting Started](#getting-started) · [Core Features](#core-features) · [Architecture](#architecture) · [Tech Stack](#tech-stack) · [Roadmap](#roadmap)
+[Getting Started](#getting-started) · [Core Features](#core-features) · [Architecture](#architecture) · [Evaluation](#evaluation) · [Tech Stack](#tech-stack) · [Roadmap](#roadmap)
 
 [简体中文](README.zh-CN.md) · **English**
 
@@ -63,6 +63,75 @@ can always connect your own data.
 | **Semantic Layer** | Industry semantic packs define metrics (with derived formulas: yield, attainment rate, average order value, etc.), dimensions, synonyms, time conventions, and chart suggestions — injected into generation prompts to keep definitions consistent |
 | **Settings Center** | Hot-reload LLM endpoints (DeepSeek / Zhipu / Qwen / any OpenAI-compatible API — takes effect on save, no restart); preferences (answer style / creativity / follow-up toggle / custom instructions); **UI language toggle (中文 / English)** — applies instantly to navigation / workbench / settings, persisted locally; profile |
 | **Reliability** | Network-isolated sandbox + CPU / memory limits + read-only data; `dahelper` JSON contract for returning results; SQLite metadata store in WAL mode |
+| **Evaluation** | 65 fixed questions (retail / manufacturing / colloquial adversarial cases) + staged metric reports (semantic resolution / context injection / skill matching / replay admission); metric thresholds wired into pytest as CI gates |
+| **Observability** | Every analysis run persists a `Run.trace`: per-stage latencies, LLM calls & tokens, skill hit mode, six result-acceptance checks; the frontend "run timeline" panel exposes it — skill replay's `LLM calls == 0` is data, not copy |
+
+## Why HelixBI?
+
+| Approach | Pain point |
+| --- | --- |
+| **Traditional BI** | Modelling, definitions and dashboards are all pre-built by hand; unmodelled questions simply go unanswered |
+| **LLM-only analytics** | Flexible but unreliable: definitions drift, code runs uncontrolled, one failure means starting over |
+
+HelixBI adds four layers of constraint so that "flexible" and "trustworthy" hold at the
+same time:
+
+```
+Semantic layer (semantic_packs)  definitions aligned first — no LLM improvisation
+   ↓
+QuerySpec confirmation           agree on "what to compute" before writing code
+   ↓
+Docker sandbox execution         no network + resource limits + read-only data
+   ↓
+Result acceptance + Skill capture  trusted conclusions become Skills — next time:
+                                   instant replay, zero tokens
+```
+
+## Evaluation
+
+`python -m backend.evaluation` prints a staged evaluation report (runs fully offline —
+no Docker / LLM needed; sandbox-dependent stages honestly report "not collected" when
+resources are missing instead of inventing numbers).
+
+Current real metrics (65 fixed questions: retail 25 + manufacturing 25 + colloquial
+adversarial 15):
+
+```
+Evaluation Report — HelixBI Agent Pipeline
+Semantic resolution accuracy (strict)   90.8%   (59/65)
+Semantic resolution accuracy (lenient)  93.8%   (61/65)
+  Metric-set hit                        93.8%
+  Dimension-set hit                     100.0%
+  YoY / QoQ detection                   100.0%
+  Metric-level P / R                    100.0% / 94.0%   F1 96.9%
+  Dimension-level P / R                 100.0% / 100.0%  F1 100.0%
+  Resolution latency p50 / p95          0.015 / 0.029 ms (deterministic, zero tokens)
+Context-injection completeness          96.6%   (113/117 definitions)
+  Rendered fidelity of resolved defs    100.0%  (113/113)
+  Derived-formula injection             100.0%  (19/19)
+Skill matching Top1 accuracy            72.3%   (65 queries / 33 captured paths)
+Skill matching Recall@2                 86.2%
+Replay-admission correctness            100.0%  (65/65)
+Execution / self-repair / end-to-end    needs the Docker sandbox; "not collected"
+                                        when unavailable
+```
+
+The evaluation is not decoration — it has already driven two real fixes: the colloquial
+adversarial subset (60%) exposed missing synonyms ("地区") and ranking words ("最长") in
+the packs; after fixing, standard phrasing reached 100%. Adding the semantic-resolution
+skeleton to skill matching lifted Top1 from 64.6% to 72.3% and Recall@2 from 76.9% to
+86.2%. Metric thresholds also gate pytest (`tests/evaluation/`).
+
+## Observability
+
+Every run (including skill replays) persists a `Run.trace`:
+
+- **Per-stage latencies**: intent → semantic resolution → skill matching → codegen → sandbox execution → summary
+- **LLM usage**: call count (by node), input / output tokens, cost — always 0 for skill replays
+- **Result acceptance**: execution ok / has artifacts / answer present / chart files really exist / well-formed tables / clean stderr — six checks decoupled from the boolean `ok`
+- **Failures leave traces too**: failed runs write the same trace — that's the round you most want to inspect
+
+The "run timeline" panel on historical chat messages exposes all of the above.
 
 ## Architecture
 
@@ -198,7 +267,8 @@ backend/                # FastAPI service (organised by business domain)
   skills/               # Skill capture / match / replay
   insights/             # rule scans (engine) + scheduler
   datasource/           # file / DB access + parquet materialization
-  semantic/             # semantic-pack runtime (registry + render)
+  semantic/             # semantic-pack runtime (registry + render + resolver)
+  evaluation/           # evaluation pipeline: datasets / metrics / runner (python -m backend.evaluation)
   report/               # export (builder for runs / exporter for dashboards)
 semantic_packs/         # industry semantic packs (retail_sales / manufacturing_production yaml)
 sandbox/                # standalone execution environment: sandbox image
@@ -207,6 +277,7 @@ frontend/               # React + AntD + Zustand + Vite
   src/pages/            # Chat Workbench Explore Agents Skills Insights
                         # Dashboards Datasources Usage
   src/stores/           # chatStore (SSE state machine) appStore
+tests/                  # pytest suite (incl. evaluation/ metric gates)
 examples/               # sample data (retail / manufacturing CSV, generated demo data)
 screenshots/            # README screenshots
 AGENTS.md               # universal AI-assistant rules (AGENTS standard)
@@ -242,7 +313,7 @@ execution, self-repair, and follow-up recommendation.
 ## Roadmap
 
 - **R2**: dashboards rendered client-side (interactive ECharts instead of PNG), insight subscription push, multi-user support & permissions, i18n for the remaining pages (the zh/en toggle already covers navigation / workbench / settings)
-- **R3**: regression evaluation (fixed question sets for accuracy), visual semantic-pack editor, metric lineage
+- **R3**: ~~regression evaluation~~ (✅ shipped: `backend/evaluation/` + `tests/evaluation/` gates; next: grow the question set and collect sandbox-execution / self-repair metrics), visual semantic-pack editor, metric lineage
 - **Architecture (P2)**: `backend/routers/` → `api/` and `config/db/models/schemas` → `core/`; introduce `features/` domains in the frontend (see [.agents/rules/architecture.md](.agents/rules/architecture.md))
 
 ## License

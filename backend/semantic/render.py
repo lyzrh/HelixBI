@@ -9,9 +9,13 @@ def _aliases(entry: dict) -> str:
     return f"，别名：{'、'.join(names)}" if names else ""
 
 
-def render_semantic_prompt(pack_id: str) -> str:
-    """把行业包渲染成 prompt 注入块（指标/维度/口径/图表建议/示例问题）。"""
-    pack = load_pack(pack_id)
+def render_semantic_prompt(pack_id: str, pack: dict | None = None) -> str:
+    """把行业包渲染成 prompt 注入块（指标/维度/口径/图表建议/示例问题）。
+
+    `pack` 可显式传入一个已加工过的包（例如评估时把 optional 指标标记为「本次数据存在」），
+    不传则按 `pack_id` 从 `semantic_packs/` 加载。
+    """
+    pack = pack if pack is not None else load_pack(pack_id)
     if not pack:
         return ""
     lines = [f"## 行业语义层（{pack.get('name', pack_id)}）—— 字段口径必须以此为准"]

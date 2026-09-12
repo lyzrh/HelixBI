@@ -1,0 +1,36 @@
+{
+  "_meta": {
+    "pack": "manufacturing_production",
+    "pack_name": "生产制造",
+    "version": 1,
+    "taxonomy": "analysis_type 判定优先级：yoy_comparison | mom_comparison > ranking > trend > breakdown > aggregate",
+    "notes": "人工标注的期望口径（指标名 / 维度名取语义包 canonical name）。用于离线度量语义解析与规划契约的准确率，不依赖 LLM 与 Docker。"
+  },
+  "cases": [
+    {"id": "mfg_001", "question": "各产线的实际产量是多少？", "expected": {"metrics": ["实际产量"], "dimensions": ["产线"], "comparison": "none", "analysis_type": "breakdown"}},
+    {"id": "mfg_002", "question": "各产线的达成率如何？", "expected": {"metrics": ["达成率"], "dimensions": ["产线"], "comparison": "none", "analysis_type": "breakdown"}},
+    {"id": "mfg_003", "question": "近30天良率的趋势，计算环比", "expected": {"metrics": ["良率"], "dimensions": [], "comparison": "mom", "analysis_type": "mom_comparison"}},
+    {"id": "mfg_004", "question": "哪个产品的不良数最多？", "expected": {"metrics": ["不良数"], "dimensions": ["产品"], "comparison": "none", "analysis_type": "ranking"}},
+    {"id": "mfg_005", "question": "停机时长最长的产线是哪条？", "expected": {"metrics": ["停机时长"], "dimensions": ["产线"], "comparison": "none", "analysis_type": "ranking"}},
+    {"id": "mfg_006", "question": "今年各产线的实际产量同比下降了多少？", "expected": {"metrics": ["实际产量"], "dimensions": ["产线"], "comparison": "yoy", "analysis_type": "yoy_comparison"}},
+    {"id": "mfg_007", "question": "各工序的良率对比", "expected": {"metrics": ["良率"], "dimensions": ["工序"], "comparison": "none", "analysis_type": "breakdown"}},
+    {"id": "mfg_008", "question": "本月计划产量是多少？", "expected": {"metrics": ["计划产量"], "dimensions": [], "comparison": "none", "analysis_type": "aggregate"}},
+    {"id": "mfg_009", "question": "各产品的计划产量与实际产量", "expected": {"metrics": ["计划产量", "实际产量"], "dimensions": ["产品"], "comparison": "none", "analysis_type": "breakdown"}},
+    {"id": "mfg_010", "question": "近90天产量趋势", "expected": {"metrics": ["实际产量"], "dimensions": [], "comparison": "none", "analysis_type": "trend"}},
+    {"id": "mfg_011", "question": "达成率最低的产线是哪条？", "expected": {"metrics": ["达成率"], "dimensions": ["产线"], "comparison": "none", "analysis_type": "ranking"}},
+    {"id": "mfg_012", "question": "上月各产线的不良数环比变化", "expected": {"metrics": ["不良数"], "dimensions": ["产线"], "comparison": "mom", "analysis_type": "mom_comparison"}},
+    {"id": "mfg_013", "question": "各产线的良品率是多少？", "expected": {"metrics": ["良率"], "dimensions": ["产线"], "comparison": "none", "analysis_type": "breakdown"}},
+    {"id": "mfg_014", "question": "哪个工序的停机时间最长？", "expected": {"metrics": ["停机时长"], "dimensions": ["工序"], "comparison": "none", "analysis_type": "ranking"}},
+    {"id": "mfg_015", "question": "去年实际产量是多少？", "expected": {"metrics": ["实际产量"], "dimensions": [], "comparison": "none", "analysis_type": "aggregate"}},
+    {"id": "mfg_016", "question": "各产品的不良数占比", "expected": {"metrics": ["不良数"], "dimensions": ["产品"], "comparison": "none", "analysis_type": "breakdown"}},
+    {"id": "mfg_017", "question": "各产线的实际产量占比", "expected": {"metrics": ["实际产量"], "dimensions": ["产线"], "comparison": "none", "analysis_type": "breakdown"}},
+    {"id": "mfg_018", "question": "计划达成率排名前三的产线", "expected": {"metrics": ["达成率"], "dimensions": ["产线"], "comparison": "none", "analysis_type": "ranking"}},
+    {"id": "mfg_019", "question": "近7天每日的良率走势", "expected": {"metrics": ["良率"], "dimensions": [], "comparison": "none", "analysis_type": "trend"}},
+    {"id": "mfg_020", "question": "今年各产品的实际产量比去年同期增长了多少？", "expected": {"metrics": ["实际产量"], "dimensions": ["产品"], "comparison": "yoy", "analysis_type": "yoy_comparison"}},
+    {"id": "mfg_021", "question": "各工序的停机时长是多少？", "expected": {"metrics": ["停机时长"], "dimensions": ["工序"], "comparison": "none", "analysis_type": "breakdown"}},
+    {"id": "mfg_022", "question": "上个月各产线的达成率环比变化", "expected": {"metrics": ["达成率"], "dimensions": ["产线"], "comparison": "mom", "analysis_type": "mom_comparison"}},
+    {"id": "mfg_023", "question": "哪个产品的良率最低？", "expected": {"metrics": ["良率"], "dimensions": ["产品"], "comparison": "none", "analysis_type": "ranking"}},
+    {"id": "mfg_024", "question": "各产线的不良数和实际产量", "expected": {"metrics": ["不良数", "实际产量"], "dimensions": ["产线"], "comparison": "none", "analysis_type": "breakdown"}},
+    {"id": "mfg_025", "question": "去年各产线的达成率", "expected": {"metrics": ["达成率"], "dimensions": ["产线"], "comparison": "none", "analysis_type": "breakdown"}}
+  ]
+}

@@ -72,6 +72,7 @@ async def analyze(sid: int, body: AnalyzeBody, db: Session = Depends(get_db)):
                 lambda: analysis_runner.run_analysis_stream(
                     run_pk, sid, body.question, body.data_source_ids,
                     body.spec, skill_block, body.agent_id, on_event,
+                    skill_ids=[s.id for s in skills],
                 ),
             )
         finally:

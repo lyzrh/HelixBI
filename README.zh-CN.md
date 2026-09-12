@@ -9,7 +9,7 @@
 自然语言提问 → Agent 生成分析代码 → Docker 沙箱安全执行 → 图表 / 表格 / 结论，
 分析资产自动沉淀为 Skill、洞察与仪表板，**越用越聪明**。
 
-[快速开始](#快速开始) · [核心特性](#核心特性) · [架构](#架构) · [技术栈](#技术栈) · [Roadmap](#roadmap)
+[快速开始](#快速开始) · [核心特性](#核心特性) · [架构](#架构) · [评估](#evaluation-评估) · [技术栈](#技术栈) · [Roadmap](#roadmap)
 
 **简体中文** · [English](README.md)
 
@@ -59,6 +59,69 @@
 | **语义层** | 行业语义包定义指标（含派生公式：良率、达成率、客单价等）、维度、同义词、时间口径、图表建议，注入生成 prompt 保证口径一致 |
 | **设置中心** | LLM 接口热更新（DeepSeek / 智谱 / 通义 / OpenAI 兼容接口，保存即生效）；偏好设置（回答风格 / 创意度 / 追问开关 / 自定义指令）；**界面语言中英切换**（导航 / 工作台 / 设置中心即时生效，本地持久化）；个人资料 |
 | **可靠性** | 沙箱无网络 + CPU / 内存限制 + 数据只读；`dahelper` JSON 契约回传；SQLite 元数据库 WAL 模式 |
+| **评估体系** | 65 条固定问题集（零售 / 制造 / 口语化对抗样例）+ 分阶段指标报告（语义解析 / 口径注入 / Skill 匹配 / 重放准入）；指标作为 CI 门禁进 pytest |
+| **可观测性** | 每轮分析落 `Run.trace`：分阶段耗时、LLM 调用与 token、Skill 命中模式、六项结果验收；前端「运行时间线」面板可展开查看——Skill 重放的 `LLM calls == 0` 是数据不是文案 |
+
+## 为什么是 HelixBI？
+
+| 路线 | 痛点 |
+| --- | --- |
+| **传统 BI** | 建模、口径、看板都靠人工预置，问一个没被建模的问题就答不了 |
+| **LLM 直接分析** | 灵活但不可信：口径自由发挥、代码不可控执行、错一次就重头再来 |
+
+HelixBI 的答案是给 Agent 加四层约束，让「灵活」与「可靠」同时成立：
+
+```
+语义层（semantic_packs）   口径先对齐，LLM 不即兴发挥
+   ↓
+QuerySpec 确认             算什么先讲清楚，再写代码
+   ↓
+Docker 沙箱执行            无网络 + 资源限制 + 数据只读
+   ↓
+结果验收 + Skill 沉淀      可信结论沉淀为 Skill，下次秒级重放、零 token
+```
+
+## Evaluation（评估）
+
+`python -m backend.evaluation` 输出分阶段评估报告（离线可跑，不需 Docker / LLM；
+需要沙箱的阶段在资源缺失时如实标注「未采集」而不是编造数字）。
+
+当前真实指标（65 条固定问题：零售 25 + 制造 25 + 口语化对抗样例 15）：
+
+```
+Evaluation Report — HelixBI Agent Pipeline
+语义解析准确率（严格）        90.8%   (59/65)
+语义解析准确率（宽松）        93.8%   (61/65)
+  指标集合命中               93.8%
+  维度集合命中               100.0%
+  同比/环比判定              100.0%
+  指标级 P / R               100.0% / 94.0%   F1 96.9%
+  维度级 P / R               100.0% / 100.0%  F1 100.0%
+  解析耗时 p50 / p95         0.015 / 0.029 ms（确定性解析，零 token）
+口径注入完整率               96.6%   (113/117 条口径)
+  已解析口径渲染保真度        100.0%  (113/113)
+  派生指标公式注入           100.0%  (19/19)
+Skill 匹配 Top1 准确率       72.3%   （65 次查询 / 33 条沉淀路径）
+Skill 匹配 Recall@2          86.2%
+重放准入判定正确率           100.0%  (65/65)
+代码执行 / 自修复 / 端到端    需 Docker 沙箱，资源缺失时如实标注「未采集」
+```
+
+评估不是摆设，它直接驱动过两次真实修复：
+口语化对抗样例（60%）暴露了语义包同义词缺口（如「地区」）与排名词缺口（如「最长」），
+修复后标准表述达 100%；Skill 匹配引入语义解析骨架后 Top1 从 64.6% 提升到 72.3%、
+Recall@2 从 76.9% 提升到 86.2%。指标阈值同时作为 pytest 门禁（`tests/evaluation/`）。
+
+## 可观测性
+
+每轮分析（含 Skill 重放）都落一条 `Run.trace`：
+
+- **分阶段耗时**：意图解析 → 语义解析 → Skill 匹配 → 代码生成 → 沙箱执行 → 总结
+- **LLM 用量**：调用次数（按节点分布）、输入 / 输出 token、成本——Skill 重放轮为 0
+- **结果验收**：执行成功 / 有产物 / 结论非空 / 图表文件真实存在 / 表格结构完整 / stderr 干净，六项检查与 `ok` 状态解耦
+- **失败留痕**：失败的运行同样写 trace，排查问题时那一轮才是最需要看的
+
+前端历史消息新增「运行时间线」面板，展开即可看到上述全部内容。
 
 ## 架构
 
@@ -185,7 +248,8 @@ backend/                # FastAPI 服务（按业务领域组织）
   skills/               # Skill 沉淀 / 匹配 / 重放
   insights/             # 规则扫描（engine）+ 定时调度（scheduler）
   datasource/           # 文件 / DB 接入 + parquet 物化
-  semantic/             # 语义包运行时（registry 加载 + render 渲染）
+  semantic/             # 语义包运行时（registry 加载 + render 渲染 + resolver 确定性解析）
+  evaluation/           # 评估流水线：数据集 / 指标 / 运行器（python -m backend.evaluation）
   report/               # 报告导出（builder 单轮 / exporter 仪表板）
 semantic_packs/         # 行业语义包（retail_sales / manufacturing_production yaml）
 sandbox/                # 独立执行环境：沙箱镜像（pandas/pyarrow/matplotlib/
@@ -194,6 +258,7 @@ frontend/               # React + AntD + Zustand + Vite
   src/pages/            # Chat Workbench Explore Agents Skills Insights
                         # Dashboards Datasources Usage
   src/stores/           # chatStore（SSE 状态机） appStore
+tests/                  # pytest 套件（含 evaluation/ 指标门禁）
 examples/               # 示例数据（零售 / 生产 CSV，演示用生成数据）
 screenshots/            # README 截图
 AGENTS.md               # AI 编程助手通用规则（AGENTS 标准）
@@ -227,7 +292,7 @@ uploads/ data/ runs/    # 运行期目录（gitignore）
 ## Roadmap
 
 - **R2**：仪表板图表前端化（ECharts 交互渲染替代 PNG）、洞察订阅推送、多用户与权限、其余页面文案国际化（当前中英切换已覆盖导航 / 工作台 / 设置中心）
-- **R3**：评估集回归（固定问题集测准确率）、语义包可视化编辑器、指标血缘
+- **R3**：~~评估集回归~~（✅ 已落地：`backend/evaluation/` + `tests/evaluation/` 门禁；下一步扩充问题集并采集沙箱执行 / 自修复指标）、语义包可视化编辑器、指标血缘
 - **架构演进（P2）**：`backend/routers/` → `api/`、`config/db/models/schemas` 收敛到 `core/`；前端引入 `features/` 分域（详见 [.agents/rules/architecture.md](.agents/rules/architecture.md)）
 
 ## License

@@ -7,6 +7,7 @@ import {
   AnswerCard, ChartGallery, CodeCollapse, FollowupCapsules,
   MessageActions, TableTabs, TerminalCollapse,
 } from './ResultBlocks';
+import { RunTraceCollapse } from './RunTrace';
 import { StepProgress } from './StepProgress';
 
 export interface MessageCallbacks {
@@ -61,6 +62,7 @@ export function MessageItem({ msg, cb }: { msg: ChatMessage; cb: MessageCallback
         onPinTable={cb.onPinTable ? (n, rows) => cb.onPinTable?.(n, rows, runId) : undefined}
       />
       <CodeCollapse code={meta.code} plan={meta.plan} />
+      <RunTraceCollapse runId={runId} />
       <FollowupCapsules followups={meta.followups || []} onAsk={cb.onAsk} />
       <MessageActions
         msg={msg}

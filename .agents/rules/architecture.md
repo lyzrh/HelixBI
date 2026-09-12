@@ -14,11 +14,12 @@ API 层 (backend/routers/, :8000)
    │  仅参数校验与路由转发，不写业务逻辑
    ▼
 领域层 (backend/ 下各领域目录)
-   ├── analysis/     Analysis Runtime：驱动分析链路、SSE 事件映射、落库；explore 自助分析
-   ├── skills/       Skill 沉淀 / 匹配 / 重放
+   ├── analysis/     Analysis Runtime：驱动分析链路、SSE 事件映射、落库、Run.trace 可观测；explore 自助分析
+   ├── skills/       Skill 沉淀 / 匹配 / 重放（重放轨迹含 llm.calls==0 证据）
    ├── insights/     规则扫描 + 定时调度 + LLM 诊断
    ├── datasource/   文件 / DB 接入与 parquet 物化
-   ├── semantic/     语义包运行时（读取并渲染 semantic_packs/）
+   ├── semantic/     语义包运行时（registry 加载 / render 渲染 / resolver 确定性解析）
+   ├── evaluation/   评估流水线：固定问题集 + 分阶段指标 + CLI 报告
    └── report/       自包含 HTML 导出
    ▼
 Agent 内核 (backend/agent/)
@@ -42,6 +43,8 @@ Agent 内核 (backend/agent/)
 - **语义层边界**：`semantic_packs/` 是**配置**（业务语义唯一来源），`backend/semantic/` 是**运行时**（加载 + 渲染）。改指标口径只改 YAML，不要改渲染代码。
 - **产物路径约定**：分析产物写 `runs/{run_id}/out`（result.json + PNG），由后端静态挂载 `/runs` 提供访问。
 - **元数据库迁移**：改表结构需同步 `backend/models.py`、`backend/schemas.py`，新列在 `backend/db.py:_migrate` 补 ALTER TABLE，并在 `backend/seed.py` 回填存量数据。
+- **可观测性跟随运行**：分析链路或 Skill 重放的行为变化，要同步维护 `Run.trace`（`analysis/runtime.py::_build_trace`、`skills/engine.py::_replay_trace`）与 `analysis/validation.py` 的验收项；失败轮同样写 trace。
+- **指标门禁**：改语义包解析、Skill 匹配等行为后跑 `python -m backend.evaluation`，确认 `tests/evaluation/` 的指标阈值不回退；评估报告缺资源阶段如实标注「未采集」，禁止编造数字。
 
 ## 已知的后续重构（P2，本次未做）
 

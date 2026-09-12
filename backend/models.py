@@ -88,6 +88,8 @@ class Run(Base):
     followups: Mapped[str] = mapped_column(Text, default="[]")
     skill_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
     duration_ms: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    # 可观测性：单次运行的分阶段耗时 / LLM 调用与 token / 校验结论（JSON）
+    trace: Mapped[str] = mapped_column(Text, default="{}")
     created_at: Mapped[str] = mapped_column(String(19), default=now_str)
 
     def to_dict(self) -> dict:
@@ -100,6 +102,7 @@ class Run(Base):
             "charts": jload(self.charts, []), "tables": jload(self.tables),
             "answer": self.answer, "followups": jload(self.followups, []),
             "skill_id": self.skill_id, "duration_ms": self.duration_ms,
+            "trace": jload(self.trace, {}),
             "created_at": self.created_at,
         }
 

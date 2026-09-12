@@ -253,6 +253,41 @@ export interface RunInfo {
   followups: string[];
   duration_ms: number | null;
   created_at: string;
+  /** 可观测轨迹（早于该功能的历史运行没有此字段） */
+  trace?: RunTrace | null;
+}
+
+/** 单次运行的可观测轨迹（backend/analysis/runtime.py `_build_trace` / skills 重放共用） */
+export interface RunTrace {
+  run_id: number;
+  question: string;
+  model: string;
+  latency_ms: number;
+  stages_ms?: number;
+  stages: { node: string; label: string; duration_ms?: number; status?: string }[];
+  semantic?: {
+    packs?: string[];
+    source?: string;
+    resolved_metrics?: string[];
+    resolved_dimensions?: string[];
+    analysis_type?: string;
+    resolver_confidence?: number;
+  };
+  skill: { matched_ids: number[]; hit: boolean; mode: string };
+  execution: { ok: boolean; attempts: number; repair_count: number; sandboxed: boolean };
+  llm: {
+    calls: number;
+    input_tokens: number;
+    output_tokens: number;
+    cost_usd: number;
+    by_node?: Record<string, number>;
+  };
+  validation: {
+    status: 'ok' | 'warn' | 'fail';
+    checks: { name: string; ok: boolean; detail: string }[];
+    failed: string[];
+  };
+  final_status: string;
 }
 
 /** SSE 事件 */

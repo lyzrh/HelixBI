@@ -9,6 +9,7 @@
 | --- | --- |
 | `registry.py` | 加载 / 列举语义包，文件 → 语义包的注册与推断 |
 | `render.py` | 语义包与 QuerySpec → prompt 块 |
+| `resolver.py` | 确定性语义解析：问题 → 指标 / 维度 / 时间 / 对比意图（零 token、可离线评测） |
 """
 
 from backend.semantic.registry import (
@@ -23,6 +24,7 @@ from backend.semantic.registry import (
     pack_name,
 )
 from backend.semantic.render import render_semantic_prompt, render_spec_prompt
+from backend.semantic.resolver import resolve, resolve_for_packs
 
 __all__ = [
     "DEFAULT_PACK",
@@ -36,4 +38,6 @@ __all__ = [
     "pack_name",
     "render_semantic_prompt",
     "render_spec_prompt",
+    "resolve",
+    "resolve_for_packs",
 ]

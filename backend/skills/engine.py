@@ -64,13 +64,41 @@ def _tokenize(text: str) -> set[str]:
 
 def match_skills(db, question: str, pack_id: str | None = None,
                  limit: int = 2, min_score: int = 2) -> list:
+    """Skill 路由：词面 2-gram + 语义包加权 + **分析类型一致性**。
+
+    为什么需要第三个信号：仅靠词面，「按从高到低排序」与「环比对比」这类
+    **同指标、不同口径**的问题无法区分，Top1 会误路由到错误的分析路径。
+    分析类型由确定性解析器（`backend.semantic.resolver`）给出，零 token。
+    """
+    from backend.semantic import resolve
+
     q_tokens = _tokenize(question)
+    query_type_cache: dict[str, str] = {}
+    skill_type_cache: dict[int, str] = {}
+
+    def _query_type(pid: str | None) -> str:
+        if not pid:
+            return "unknown"
+        if pid not in query_type_cache:
+            query_type_cache[pid] = resolve(question, pid).get("analysis_type", "unknown")
+        return query_type_cache[pid]
+
+    def _skill_type(skill) -> str:
+        if skill.id not in skill_type_cache:
+            pid = skill.pack_id or pack_id
+            skill_type_cache[skill.id] = (
+                resolve(skill.question, pid).get("analysis_type", "unknown") if pid else "unknown")
+        return skill_type_cache[skill.id]
+
     scored = []
     for skill in db.query(Skill).filter(Skill.enabled == True).all():  # noqa: E712
         corpus = skill.question + " " + skill.name + " " + " ".join(jload(skill.tags, []))
         score = len(q_tokens & _tokenize(corpus))
         if pack_id and skill.pack_id == pack_id:
             score += 3
+        q_type = _query_type(skill.pack_id or pack_id)
+        if q_type != "unknown" and q_type == _skill_type(skill):
+            score += 2
         if score >= min_score:
             scored.append((score, skill))
     scored.sort(key=lambda x: -x[0])
@@ -147,6 +175,7 @@ def run_skill(skill_pk: int, session_id: int | None, data_source_ids: list[int],
         summary = analysis_runner.run_analysis_stream(
             run_pk, session_id, skill.question, data_source_ids,
             jload(skill.spec), render_skill_prompt([skill]), None, emit,
+            skill_ids=[skill.id],
         )
         with SessionLocal() as db:
             s2 = db.get(Skill, skill_pk)
@@ -214,6 +243,7 @@ def _replay(db, skill, session_id, data_source_ids, files, emit, t0) -> dict:
         run.tables = jdump(execution["tables"])
         run.answer = answer
         run.duration_ms = duration_ms
+        run.trace = jdump(_replay_trace(run_pk, skill, execution, answer, ok, duration_ms))
         meta = {"run_id": run_pk, "charts": _chart_urls(execution),
                 "tables": execution["tables"], "followups": [],
                 "attempts": 1, "ok": ok, "code": code, "skill_replay": True}
@@ -227,6 +257,35 @@ def _replay(db, skill, session_id, data_source_ids, files, emit, t0) -> dict:
             s2.success_count += 1
         db2.commit()
     return {"run_id": run_pk, "message_id": msg.id, "ok": ok, "duration_ms": duration_ms}
+
+
+def _replay_trace(run_pk: int, skill, execution: dict, answer: str,
+                  ok: bool, duration_ms: int) -> dict:
+    """重放路径的可观测记录。
+
+    关键字段是 `llm.calls == 0`——「Skill 重放不经过 LLM」从此是可验证的数据，
+    而不是 README 里的一句自我声明。
+    """
+    from backend import config
+    from backend.analysis.validation import validate_final
+
+    return {
+        "run_id": run_pk,
+        "question": skill.question,
+        "model": config.MODEL_NAME,
+        "latency_ms": duration_ms,
+        "stages": [{"node": "skill", "label": f"重放 Skill「{skill.name}」",
+                    "duration_ms": duration_ms, "status": "done"}],
+        "semantic": {"packs": [skill.pack_id] if skill.pack_id else [],
+                     "source": "skill", "analysis_type": "replay",
+                     "resolved_metrics": [], "resolved_dimensions": []},
+        "skill": {"matched_ids": [skill.id], "hit": True, "mode": "replay"},
+        "execution": {"ok": ok, "attempts": 1, "repair_count": 0, "sandboxed": True},
+        "llm": {"calls": 0, "input_tokens": 0, "output_tokens": 0,
+                "cost_usd": 0.0, "by_node": {}},
+        "validation": validate_final({"execution": execution, "answer": answer}),
+        "final_status": "done" if ok else "failed",
+    }
 
 
 def _build_files(db, data_source_ids) -> dict[str, str]:

@@ -61,3 +61,7 @@ def _migrate() -> None:
             conn.exec_driver_sql(
                 "ALTER TABLE dashboard_items ADD COLUMN span INTEGER NOT NULL DEFAULT 12")
             conn.commit()
+        run_cols = {row[1] for row in conn.exec_driver_sql("PRAGMA table_info(runs)")}
+        if "trace" not in run_cols:
+            conn.exec_driver_sql("ALTER TABLE runs ADD COLUMN trace TEXT DEFAULT '{}'")
+            conn.commit()

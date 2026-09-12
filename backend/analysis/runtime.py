@@ -11,13 +11,17 @@ import time
 import urllib.parse
 from pathlib import Path
 
+from backend import config
 from backend.agent.graph import NODE_LABELS, stream_analysis
 from backend.agent.sandbox import run_in_sandbox
-from backend.semantic import pack_for_file, render_semantic_prompt
+from backend.analysis.validation import validate_final
 from backend.config import RUNS_DIR
-from backend.db import SessionLocal
-from backend.models import DataSource, Message, Run, SceneAgent, jdump, jload
 from backend.datasource.service import materialize, needs_materialize
+from backend.db import SessionLocal
+from backend.models import (
+    DataSource, Message, Run, SceneAgent, TokenUsage, jdump, jload,
+)
+from backend.semantic import pack_for_file, render_semantic_prompt, resolve
 
 EXTENDED_NODE_LABELS = {**NODE_LABELS, "materialize": "缓存数据库数据", "skill": "复用分析 Skill"}
 
@@ -31,19 +35,27 @@ def run_analysis_stream(
     skill_block: str = "",
     agent_id: int | None = None,
     on_event=None,
+    skill_ids: list[int] | None = None,
 ) -> dict:
-    """在工作线程中执行完整分析流，返回最终落库结果摘要。"""
+    """在工作线程中执行完整分析流，返回最终落库结果摘要。
+
+    全过程记入 `Run.trace`（分阶段耗时 / LLM 调用与 token / 口径解析 / 校验结论）。
+    **失败同样留痕**——排查问题时，失败的那一轮往往才是最需要看的。
+    """
     t0 = time.time()
     emit = on_event or (lambda *_: None)
+    stages: list[dict] = []
     try:
         with SessionLocal() as db:
-            files, semantic_block = _prepare(db, data_source_ids, agent_id, emit)
+            files, semantic_block, semantic_meta = _prepare(db, data_source_ids, agent_id, emit)
             history = _history_from_session(db, session_id)
-        final = _drive(run_pk, question, files, history, spec,
-                       semantic_block, skill_block, emit, session_id=session_id)
+        final, stages = _drive(run_pk, question, files, history, spec,
+                               semantic_block, skill_block, emit, session_id=session_id)
+        trace = _build_trace(run_pk, question, t0, stages, final, semantic_meta,
+                             skill_block, skill_ids)
         with SessionLocal() as db:
-            summary = _persist_result(db, run_pk, session_id, question,
-                                      data_source_ids, final, int((time.time() - t0) * 1000))
+            summary = _persist_result(db, run_pk, session_id, question, data_source_ids,
+                                      final, int((time.time() - t0) * 1000), trace)
         emit("done", summary)
         return summary
     except Exception as exc:
@@ -54,6 +66,14 @@ def run_analysis_stream(
             if run:
                 run.status = "failed"
                 run.stderr = str(exc)[-4000:]
+                run.trace = jdump({
+                    "run_id": run_pk, "question": question, "model": config.MODEL_NAME,
+                    "latency_ms": int((time.time() - t0) * 1000),
+                    "stages": stages, "final_status": "failed",
+                    "validation": {"status": "fail", "checks": [],
+                                   "failed": ["runtime_error"]},
+                    "error": str(exc)[:500],
+                })
                 db.commit()
         emit("error", {"message": str(exc)})
         return {"run_id": run_pk, "ok": False, "message": str(exc)}
@@ -61,7 +81,8 @@ def run_analysis_stream(
 
 # ---- 准备阶段：数据源 → 文件映射 + 语义块 ----
 
-def _prepare(db, data_source_ids: list[int], agent_id: int | None, emit) -> tuple[dict, str]:
+def _prepare(db, data_source_ids: list[int], agent_id: int | None,
+             emit) -> tuple[dict, str, dict]:
     sources = [db.get(DataSource, i) for i in data_source_ids]
     sources = [s for s in sources if s]
     if not sources:
@@ -88,7 +109,8 @@ def _prepare(db, data_source_ids: list[int], agent_id: int | None, emit) -> tupl
     if agent_id:
         agent = db.get(SceneAgent, agent_id)
         if agent and agent.pack_id:
-            return files, render_semantic_prompt(agent.pack_id)
+            return (files, render_semantic_prompt(agent.pack_id),
+                    {"packs": [agent.pack_id], "source": "agent"})
     blocks, seen_packs = [], set()
     for ds in sources:
         pack_id = ds.pack_id or pack_for_file(ds.name, jload(ds.columns_json, []))
@@ -96,7 +118,8 @@ def _prepare(db, data_source_ids: list[int], agent_id: int | None, emit) -> tupl
             continue
         seen_packs.add(pack_id)
         blocks.append(render_semantic_prompt(pack_id))
-    return files, "\n\n".join(b for b in blocks if b)
+    return (files, "\n\n".join(b for b in blocks if b),
+            {"packs": sorted(seen_packs), "source": "sources"})
 
 
 def _history_from_session(db, session_id: int, limit: int = 3) -> list[dict]:
@@ -115,15 +138,38 @@ def _history_from_session(db, session_id: int, limit: int = 3) -> list[dict]:
 
 # ---- 驱动阶段：事件映射 ----
 
-def _drive(run_pk, question, files, history, spec, semantic_block, skill_block, emit, session_id=None) -> dict:
+def _drive(run_pk, question, files, history, spec, semantic_block, skill_block, emit,
+           session_id=None) -> tuple[dict, list[dict]]:
+    """驱动图谱并把每个节点的耗时记进 stages（供 trace 使用）。
+
+    `stream_analysis` 每完成一个节点才 yield，因此"上一次 yield 到这一次 yield
+    的间隔"就是该节点的耗时。
+    """
     final: dict = {}
+    stages: list[dict] = []
     emit("step", {"node": "parse_intent", "label": NODE_LABELS["parse_intent"],
                   "status": "running"})
+    last = time.time()
     for node, delta, merged in stream_analysis(
         question, files, history=history, spec=spec,
         semantic_block=semantic_block, skill_block=skill_block,
         run_id=run_pk, session_id=session_id,
     ):
+        now = time.time()
+        stage = {
+            "node": node,
+            "label": EXTENDED_NODE_LABELS.get(node, node),
+            "duration_ms": int((now - last) * 1000),
+            "status": "done",
+        }
+        if node == "execute":
+            stage["ok"] = bool((merged.get("execution") or {}).get("ok"))
+            stage["attempt"] = merged.get("attempts", 0)
+        elif node == "generate_code":
+            stage["attempt"] = merged.get("attempts", 0)
+        stages.append(stage)
+        last = now
+
         final = merged
         _emit_node_done(emit, node, delta, merged)
         nxt = _predict_next(node, merged)
@@ -132,7 +178,7 @@ def _drive(run_pk, question, files, history, spec, semantic_block, skill_block, 
                           "status": "running"})
     if not final:
         raise RuntimeError("分析流程未产生任何结果")
-    return final
+    return final, stages
 
 
 def _emit_node_done(emit, node, delta, merged):
@@ -183,7 +229,7 @@ def _predict_next(node: str, merged: dict) -> str | None:
 # ---- 落库 ----
 
 def _persist_result(db, run_pk, session_id, question, data_source_ids,
-                    final, duration_ms) -> dict:
+                    final, duration_ms, trace: dict | None = None) -> dict:
     run = db.get(Run, run_pk)
     if not run:
         raise RuntimeError(f"run {run_pk} 不存在")
@@ -206,6 +252,7 @@ def _persist_result(db, run_pk, session_id, question, data_source_ids,
     run.answer = final.get("answer", "")
     run.followups = jdump(final.get("followups") or [])
     run.duration_ms = duration_ms
+    run.trace = jdump(trace or {})
 
     meta = {
         "run_id": run_pk, "charts": charts, "tables": execution.get("tables") or {},
@@ -221,6 +268,76 @@ def _persist_result(db, run_pk, session_id, question, data_source_ids,
     run.message_id = msg.id
     db.commit()
     return {"run_id": run_pk, "message_id": msg.id, "ok": ok, "duration_ms": duration_ms}
+
+
+# ---- 可观测性 ----
+
+def _build_trace(run_pk, question, t0, stages, final, semantic_meta,
+                 skill_block, skill_ids) -> dict:
+    """组装单次运行的可观测记录（写进 Run.trace，前端时间线与评估共用同一份）。"""
+    execution = final.get("execution") or {}
+    attempts = final.get("attempts", 0) or 0
+    packs = list((semantic_meta or {}).get("packs") or [])
+    resolved = resolve(question, packs[0]) if packs else {}
+    validation = validate_final(final)
+
+    return {
+        "run_id": run_pk,
+        "question": question,
+        "model": config.MODEL_NAME,
+        "latency_ms": int((time.time() - t0) * 1000),
+        "stages_ms": sum(s.get("duration_ms", 0) for s in stages),
+        "stages": stages,
+        "intent": final.get("spec") or {},
+        "semantic": {
+            "packs": packs,
+            "source": (semantic_meta or {}).get("source", ""),
+            "resolved_metrics": [m["name"] for m in resolved.get("metrics", [])],
+            "resolved_dimensions": [d["name"] for d in resolved.get("dimensions", [])],
+            "analysis_type": resolved.get("analysis_type", "unknown"),
+            "resolver_confidence": resolved.get("confidence", 0.0),
+        },
+        "skill": {
+            "matched_ids": list(skill_ids or []),
+            "hit": bool(skill_block),
+            "mode": "few_shot" if skill_block else "fresh",
+        },
+        "execution": {
+            "ok": bool(execution.get("ok")),
+            "attempts": attempts,
+            "repair_count": max(attempts - 1, 0),
+            "sandboxed": True,
+        },
+        "llm": _llm_stats(run_pk),
+        "validation": validation,
+        "final_status": "done" if validation["status"] != "fail" else "failed",
+    }
+
+
+def _llm_stats(run_pk: int) -> dict:
+    """本轮 LLM 用量：调用次数 = token_usages 的记录条数（链路已有埋点，直接汇总）。
+
+    这也是「Skill 重放不调 LLM」的**可验证证据**：重放轮的 calls 必须是 0。
+    """
+    empty = {"calls": 0, "input_tokens": 0, "output_tokens": 0,
+             "cost_usd": 0.0, "by_node": {}}
+    try:
+        with SessionLocal() as db:
+            rows = db.query(TokenUsage).filter(TokenUsage.run_id == run_pk).all()
+    except Exception:  # noqa: BLE001 — 统计失败不得影响主流程
+        return empty
+    if not rows:
+        return empty
+    by_node: dict[str, int] = {}
+    for row in rows:
+        by_node[row.node] = by_node.get(row.node, 0) + 1
+    return {
+        "calls": len(rows),
+        "input_tokens": sum(r.input_tokens or 0 for r in rows),
+        "output_tokens": sum(r.output_tokens or 0 for r in rows),
+        "cost_usd": round(sum(r.cost_usd or 0.0 for r in rows), 6),
+        "by_node": by_node,
+    }
 
 
 # ---- 工具 ----
