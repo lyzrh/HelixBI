@@ -13,7 +13,7 @@ from pathlib import Path
 import pandas as pd
 from sqlalchemy import create_engine, inspect, text
 
-from app.semantic import load_pack
+from backend.semantic import load_pack
 from backend.config import (
     MATERIALIZED_DIR, MATERIALIZED_MAX_ROWS, MATERIALIZED_TTL_HOURS,
 )

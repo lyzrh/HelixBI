@@ -7,8 +7,8 @@ from langchain_core.messages import HumanMessage
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
-from app import config
-from app.graph import get_llm, reset_llm
+from backend import config
+from backend.agent.graph import get_llm, reset_llm
 from backend.db import get_db
 from backend.models import SystemSetting, now_str
 
@@ -174,10 +174,10 @@ def update_preferences(body: PreferencesBody, db: Session = Depends(get_db)):
     _write_kv(db, K_PREFERENCES, prefs)
 
     # 温度热更新 LLM 单例 + 图内偏好缓存失效
-    from app import config
+    from backend import config
     config.LLM_TEMPERATURE = prefs["temperature"]
     reset_llm()
-    from app.graph import invalidate_prefs_cache
+    from backend.agent.graph import invalidate_prefs_cache
     invalidate_prefs_cache()
     return prefs
 

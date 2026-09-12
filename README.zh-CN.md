@@ -62,6 +62,9 @@
 
 ## 架构
 
+后端按**业务领域**组织（而不是按技术分层堆砌）：`backend/` 下每个目录代表一项能力，
+`routers/` 只是薄薄的 API 层，业务实现都在领域目录里。
+
 ```
 ┌──────────────── React 18 + AntD 5 前端（Vite） ────────────────┐
 │ 工作台 / 对话分析 / 自助分析 / 场景Agent / Skill库 /            │
@@ -70,14 +73,16 @@
                     SSE 流式（spec/code/step/answer/chart…）
 ┌───────────────────────────▼───────────────────────────────────┐
 │                     FastAPI 后端（:8000）                       │
-│  routers/   analysis(SSE) sessions datasources agents skills   │
-│             insights dashboards explore(SQL) settings usage    │
-│  services/  analysis_runner  # LangGraph 包装 + 运行持久化       │
-│             skill_engine    # 沉淀 / 匹配 / 重放 / few-shot      │
-│             insight_engine  # 规则扫描 + LLM 诊断                │
-│             insight_scheduler # 定时扫描后台循环                  │
-│             datasource      # 文件 + DB 连接 + parquet 物化      │
-│  semantic/  行业语义包（零售销售 / 生产制造）                      │
+│  routers/    API 层：analysis(SSE) sessions datasources agents  │
+│              skills insights dashboards explore(SQL) settings  │
+│              usage misc                                        │
+│  agent/      Agent 内核：graph（LangGraph 图谱）+ sandbox 客户端 │
+│  analysis/   Analysis Runtime（驱动 + 落库）+ 自助分析（零 token）│
+│  skills/     Skill 沉淀 / 匹配 / 重放 / few-shot                │
+│  insights/   规则扫描 + 定时调度 + LLM 诊断                      │
+│  datasource/ 文件 + DB 连接 + parquet 物化                       │
+│  semantic/   语义包运行时（读取 semantic_packs/）                │
+│  report/     自包含 HTML 报告导出                                │
 │  SQLite 元数据库（WAL）：会话/消息/运行/数据源/Agent/Skill/       │
 │                         洞察/仪表板/系统设置/Token用量            │
 └───────────────────────────┬───────────────────────────────────┘
@@ -88,6 +93,9 @@
          Docker 沙箱：--network none、CPU/内存限制、/data 只读
          文件型数据源直接挂载；数据库数据先物化为 parquet 再进沙箱
 ```
+
+口径与配置的边界：`semantic_packs/` 是**配置**（业务语义唯一来源），
+`backend/semantic/` 是**运行时**（加载 + 渲染成 prompt）。
 
 ## 快速开始
 
@@ -164,18 +172,24 @@ cd frontend && npm install && npm run dev   # http://localhost:5173（已配代�
 ## 目录结构
 
 ```
-backend/                # FastAPI 服务
+backend/                # FastAPI 服务（按业务领域组织）
   main.py               # 入口（CORS / 静态托管 / lifespan）
+  config.py             # 全局配置单一入口（路径 / LLM / 沙箱 / 数据接入）
+  db.py                 # SQLite 引擎（WAL）
   models.py schemas.py  # ORM（元数据表）与 API 模型
   seed.py               # 内置数据源 / Agent / Skill / 仪表板
-  routers/              # analysis sessions datasources agents skills
-                        # insights dashboards explore settings usage misc
-  services/             # analysis_runner skill_engine insight_engine
-                        # insight_scheduler datasource report_export
-semantics/              # 行业语义包（retail_sales / manufacturing_production yaml）
-app/                    # LangGraph 内核
-  graph.py profiler.py sandbox.py prompts.py report.py semantic.py
-sandbox/                # 沙箱镜像（pandas/pyarrow/matplotlib/中文字体 + dahelper）
+  routers/              # API 层：analysis sessions datasources agents skills
+                        #   insights dashboards explore settings usage misc
+  agent/                # Agent 内核：graph prompts profiler sandbox
+  analysis/             # Analysis Runtime（runtime）+ 自助分析（explore）
+  skills/               # Skill 沉淀 / 匹配 / 重放
+  insights/             # 规则扫描（engine）+ 定时调度（scheduler）
+  datasource/           # 文件 / DB 接入 + parquet 物化
+  semantic/             # 语义包运行时（registry 加载 + render 渲染）
+  report/               # 报告导出（builder 单轮 / exporter 仪表板）
+semantic_packs/         # 行业语义包（retail_sales / manufacturing_production yaml）
+sandbox/                # 独立执行环境：沙箱镜像（pandas/pyarrow/matplotlib/
+                        #   中文字体 + dahelper 结果契约）
 frontend/               # React + AntD + Zustand + Vite
   src/pages/            # Chat Workbench Explore Agents Skills Insights
                         # Dashboards Datasources Usage
@@ -202,7 +216,8 @@ uploads/ data/ runs/    # 运行期目录（gitignore）
 ## 设计思路
 
 - **口径先行**：行业语义包 + QuerySpec 确认，先对齐「算什么」再写代码，避免 LLM 自由发挥导致口径漂移
-- **品牌视觉**：绎紫设计系统（主色 `#5645D4` + 深海军蓝 `#0A1530`），双螺旋品牌标识——紫链路代表业务数据、青链路代表分析智能，节点象征沉淀的分析资产- **沙箱兜底**：生成的代码永远在无网络 Docker 容器里跑，数据只读，结果通过 `dahelper` JSON 契约回传
+- **品牌视觉**：绎紫设计系统（主色 `#5645D4` + 深海军蓝 `#0A1530`），双螺旋品牌标识——紫链路代表业务数据、青链路代表分析智能，节点象征沉淀的分析资产
+- **沙箱兜底**：生成的代码永远在无网络 Docker 容器里跑，数据只读，结果通过 `dahelper` JSON 契约回传
 - **资产沉淀**：一次成功的分析变成 Skill（重放秒回）、一次有价值的发现固定到仪表板——系统随使用变强，而不是每次从零开始
 - **主动而非被动**：定时洞察扫描让系统在用户提问之前就把异常送到眼前
 - **Token 可控**：Skill 重放不调 LLM；自助分析与 SQL 查询全部本地计算；追问推荐可关闭；测试连接只发 max_tokens=1 的探针请求
@@ -213,6 +228,7 @@ uploads/ data/ runs/    # 运行期目录（gitignore）
 
 - **R2**：仪表板图表前端化（ECharts 交互渲染替代 PNG）、洞察订阅推送、多用户与权限、其余页面文案国际化（当前中英切换已覆盖导航 / 工作台 / 设置中心）
 - **R3**：评估集回归（固定问题集测准确率）、语义包可视化编辑器、指标血缘
+- **架构演进（P2）**：`backend/routers/` → `api/`、`config/db/models/schemas` 收敛到 `core/`；前端引入 `features/` 分域（详见 [.agents/rules/architecture.md](.agents/rules/architecture.md)）
 
 ## License
 

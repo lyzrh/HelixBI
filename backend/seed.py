@@ -9,7 +9,7 @@ import shutil
 from sqlalchemy.orm import Session
 
 from backend.models import Dashboard, DataSource, SceneAgent, Skill
-from backend.services.datasource import count_rows, read_columns
+from backend.datasource.service import count_rows, read_columns
 
 EXAMPLES = [
     ("sample_sales.csv", "零售销售示例数据", "retail_sales"),
@@ -147,7 +147,7 @@ def run(db: Session) -> None:
 def _seed_data_sources(db: Session) -> None:
     from pathlib import Path
 
-    from app.config import PROJECT_ROOT
+    from backend.config import PROJECT_ROOT
 
     # 回填历史空 row_count（文件型）；补齐旧数据的 file_name / file_type
     for ds in db.query(DataSource).filter(
@@ -157,14 +157,14 @@ def _seed_data_sources(db: Session) -> None:
     for ds in db.query(DataSource).filter(
             DataSource.type == "file", DataSource.file_name.is_(None)).all():
         if ds.file_path:
-            from backend.services.datasource import detect_file_type
+            from backend.datasource.service import detect_file_type
 
             ds.file_name = Path(ds.file_path).name
             ds.file_type = detect_file_type(ds.file_path)
 
     if db.query(DataSource).filter(DataSource.builtin == True).count():  # noqa: E712
         return
-    from app.semantic import assign_pack
+    from backend.semantic import assign_pack
 
     for filename, label, pack_id in EXAMPLES:
         src = PROJECT_ROOT / "examples" / filename
@@ -175,7 +175,7 @@ def _seed_data_sources(db: Session) -> None:
             continue
         columns = read_columns(str(dest))
         assign_pack(filename, pack_id)
-        from backend.services.datasource import detect_file_type
+        from backend.datasource.service import detect_file_type
 
         db.add(DataSource(
             name=filename, type="file", file_path=str(dest),

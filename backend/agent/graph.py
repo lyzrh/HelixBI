@@ -15,8 +15,10 @@ from langchain_core.messages import HumanMessage, SystemMessage
 from langchain_openai import ChatOpenAI
 from langgraph.graph import END, StateGraph
 
-from . import config, prompts
-from .config import MAX_FIX_ATTEMPTS
+from backend import config
+from backend.config import MAX_FIX_ATTEMPTS
+
+from . import prompts
 from .profiler import profile_all
 from .sandbox import SandboxResult, run_in_sandbox
 
@@ -230,7 +232,7 @@ def parse_intent(state: AgentState) -> dict:
 
 def generate_code(state: AgentState) -> dict:
     files = state["files"]
-    from .semantic import render_spec_prompt
+    from backend.semantic import render_spec_prompt
 
     messages = [
         SystemMessage(content=prompts.GENERATE_SYSTEM + _pref_block("generate")),

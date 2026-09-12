@@ -1,6 +1,6 @@
 """token 用量提取：langchain usage_metadata 是 dict，旧代码按属性读恒为 0。"""
 
-from app.graph import _extract_usage
+from backend.agent.graph import _extract_usage
 
 
 class FakeResponse:

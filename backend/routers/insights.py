@@ -7,7 +7,7 @@ from sqlalchemy.orm import Session
 from backend.db import get_db
 from backend.models import DataSource, Insight, now_str
 from backend.schemas import InsightGenerateBody, InsightPatch
-from backend.services import insight_engine, insight_scheduler
+from backend.insights import engine as insight_engine, scheduler as insight_scheduler
 
 router = APIRouter(prefix="/insights")
 

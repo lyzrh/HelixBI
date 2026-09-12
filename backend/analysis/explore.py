@@ -13,7 +13,7 @@ import pandas as pd
 
 from backend.models import DataSource
 from backend.schemas import ExploreBody
-from backend.services.datasource import _read_file
+from backend.datasource.service import _read_file
 
 AGG_FUNCS = {"sum", "avg", "count", "count_distinct", "max", "min"}
 FILTER_OPS = {"eq", "ne", "gt", "lt", "ge", "le", "contains", "in"}

@@ -1,6 +1,6 @@
 """仪表板 / 单轮分析的 HTML 导出（自包含，图表 base64 内嵌）。
 
-复用 app/report.py 的样式与实现思路。
+复用 backend/report/builder.py 的样式与实现思路。
 """
 
 import base64
@@ -8,9 +8,9 @@ import html
 import pathlib
 from datetime import datetime
 
-from app.report import build_html_report
+from backend.report.builder import build_html_report
 from backend.models import Dashboard, DashboardItem, Insight, Run
-from backend.services.analysis_runner import chart_url_to_path
+from backend.analysis.runtime import chart_url_to_path
 from backend.models import jload
 
 STYLE = """

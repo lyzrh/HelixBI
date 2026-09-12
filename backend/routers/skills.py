@@ -11,7 +11,7 @@ from backend.db import get_db
 from backend.models import Skill
 from backend.routers.analysis import SSE_HEADERS, _semaphore, _sse_frame
 from backend.schemas import SkillCreate, SkillFromRun, SkillPatch, SkillRunBody
-from backend.services import skill_engine
+from backend.skills import engine as skill_engine
 
 router = APIRouter(prefix="/skills")
 

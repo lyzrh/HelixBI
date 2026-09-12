@@ -6,14 +6,14 @@ from pathlib import Path
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
 from sqlalchemy.orm import Session
 
-from app.semantic import assign_pack, infer_pack, list_packs, load_pack
+from backend.semantic import assign_pack, infer_pack, list_packs, load_pack
 from backend.config import MAX_UPLOAD_MB, UPLOADS_DIR
 from backend.db import get_db
 from backend.models import DataSource
 from backend.schemas import (
     DataSourceDbCreate, DataSourcePatch, DbTestBody, MaterializeBody,
 )
-from backend.services.datasource import (
+from backend.datasource.service import (
     count_rows, detect_file_type, list_tables, materialize, preview,
     read_columns, test_connection,
 )

@@ -20,11 +20,11 @@ async def lifespan(app: FastAPI):
     # 启动时恢复用户偏好（创意度温度等，设置页保存过则重启仍生效）
     from backend.db import SessionLocal
     from backend.routers.settings import _read_kv, DEFAULT_PREFERENCES, K_PREFERENCES
-    from app import config as app_config
+    from backend import config as app_config
     with SessionLocal() as db:
         prefs = _read_kv(db, K_PREFERENCES, DEFAULT_PREFERENCES)
     app_config.LLM_TEMPERATURE = prefs.get("temperature", 0.0)
-    from backend.services.insight_scheduler import start_scheduler, stop_scheduler
+    from backend.insights.scheduler import start_scheduler, stop_scheduler
     start_scheduler()  # 定时洞察扫描后台循环
     yield
     stop_scheduler()

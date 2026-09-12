@@ -12,7 +12,7 @@ from backend.schemas import (
     DashboardCreate, DashboardItemCreate, DashboardItemPatch, DashboardPatch,
     ItemReorderBody,
 )
-from backend.services.report_export import build_dashboard_html
+from backend.report.exporter import build_dashboard_html
 
 router = APIRouter(prefix="/dashboards")
 

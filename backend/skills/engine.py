@@ -10,13 +10,13 @@ import time
 import uuid
 from pathlib import Path
 
-from app.sandbox import run_in_sandbox
+from backend.agent.sandbox import run_in_sandbox
 from backend.db import SessionLocal
 from backend.models import (
     DataSource, Message, Run, Session as DbSession, Skill,
     jdump, jload,
 )
-from backend.services.analysis_runner import _chart_urls
+from backend.analysis.runtime import _chart_urls
 
 PLACEHOLDER = "{name}"
 
@@ -140,7 +140,7 @@ def run_skill(skill_pk: int, session_id: int | None, data_source_ids: list[int],
                 return summary
 
         # 列不匹配 → few-shot 重新生成（analysis_runner 内部已发 done）
-        from backend.services import analysis_runner
+        from backend.analysis import runtime as analysis_runner
         with SessionLocal() as db:
             skill = db.get(Skill, skill_pk)
             run_pk = _create_run(db, session_id, skill.question, data_source_ids, skill.id)
@@ -237,7 +237,7 @@ def _build_files(db, data_source_ids) -> dict[str, str]:
             continue
         if ds.type == "db":
             if not ds.materialized_path:
-                from backend.services.datasource import materialize
+                from backend.datasource.service import materialize
                 materialize(ds, ds.materialized_table)
                 db.commit()
             files[f"{ds.materialized_table}.parquet"] = ds.materialized_path

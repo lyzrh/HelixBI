@@ -13,7 +13,11 @@
 - 组件用 AntD 5；图表用 ECharts（自服务分析全部本地渲染，零 token——不要把图表渲染改成后端出图）。
 - 主题遵循"绎紫"设计系统：主色 `#5645D4`、深海军蓝 `#0A1530`（见 `theme.ts` / `global.css`）；新增 UI 不要引入体系外的主色。
 - 新增用户可见文案必须同时提供 zh / en 两条，进 `i18n.ts`。
-- SSE 事件类型与后端 `analysis_runner` 输出对齐，新增事件类型时前后端同一次提交里一起改。
+- SSE 事件类型与后端 `backend/analysis/runtime.py` 输出对齐，新增事件类型时前后端同一次提交里一起改。
+
+## 待办（P2）
+
+页面数量已经上来了（Chat / Workbench / Explore / Agents / Skills / Insights / Dashboards / Datasources / Usage）。后续建议引入 `frontend/src/features/`（analysis / skills / insights / dashboards / datasources / agents），把一个功能相关的组件、store、api 封装收敛到同一目录，`components/` 只保留跨功能复用件。
 
 ## 启动与验证
 

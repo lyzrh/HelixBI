@@ -5,7 +5,7 @@ import json
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 
-from app.semantic import list_packs
+from backend.semantic import list_packs
 from backend.db import get_db
 from backend.models import DataSource, SceneAgent
 from backend.schemas import AgentCreate, AgentPatch

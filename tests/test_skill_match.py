@@ -1,6 +1,6 @@
 """Skill 引擎纯函数：token 匹配、列匹配、读取器兼容、/data 路径归一化。"""
 
-from backend.services.skill_engine import (
+from backend.skills.engine import (
     _columns_match, _normalize_data_paths, _reader_compatible, _tokenize,
 )
 

@@ -1,5 +1,13 @@
 # 企业级 AgentBI 改造实施计划（参考 FineBI NEXT）
 
+> **历史文档**：本文件记录当时（Streamlit → FastAPI + React 改造期）的设计决策与落地清单，
+> 其中的路径是**当时的**结构，已被后续重构取代。当前结构请看
+> [AGENTS.md](../../AGENTS.md) 的架构地图与 [.agents/rules/architecture.md](../rules/architecture.md)。
+> 路径对照：`app/graph.py` → `backend/agent/graph.py`；`app/sandbox.py` → `backend/agent/sandbox.py`；
+> `app/semantic.py` + `semantics/` → `backend/semantic/` + `semantic_packs/`；
+> `app/report.py` → `backend/report/builder.py`；
+> `backend/services/*` → `backend/analysis/` `backend/skills/` `backend/insights/` `backend/datasource/` `backend/report/`。
+
 ## 一、背景与目标
 
 当前项目是 LangGraph 驱动的对话式数据分析 Agent（Streamlit 单页 UI），本次改造参考帆软 FineBI NEXT（2026 Data Agent 平台）的功能形态，升级为**面向制造业和零售业的企业级 AgentBI**。

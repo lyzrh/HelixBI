@@ -1,4 +1,4 @@
-"""分析运行器：把 app.graph.stream_analysis 包装为事件回调 + 落库。
+"""分析运行器：把 backend.agent.graph.stream_analysis 包装为事件回调 + 落库。
 
 关键约束：
 - stream_analysis 是同步生成器（内部阻塞于 LLM 与 docker），调用方需在工作
@@ -11,13 +11,13 @@ import time
 import urllib.parse
 from pathlib import Path
 
-from app.graph import NODE_LABELS, stream_analysis
-from app.sandbox import run_in_sandbox
-from app.semantic import pack_for_file, render_semantic_prompt
+from backend.agent.graph import NODE_LABELS, stream_analysis
+from backend.agent.sandbox import run_in_sandbox
+from backend.semantic import pack_for_file, render_semantic_prompt
 from backend.config import RUNS_DIR
 from backend.db import SessionLocal
 from backend.models import DataSource, Message, Run, SceneAgent, jdump, jload
-from backend.services.datasource import materialize, needs_materialize
+from backend.datasource.service import materialize, needs_materialize
 
 EXTENDED_NODE_LABELS = {**NODE_LABELS, "materialize": "缓存数据库数据", "skill": "复用分析 Skill"}
 
@@ -171,7 +171,7 @@ def _predict_next(node: str, merged: dict) -> str | None:
                           execution.get("charts")])
         if execution.get("ok") and has_output:
             return "summarize"
-        from app.config import MAX_FIX_ATTEMPTS
+        from backend.config import MAX_FIX_ATTEMPTS
         if merged.get("attempts", 0) <= MAX_FIX_ATTEMPTS:
             return "generate_code"
         return "summarize"

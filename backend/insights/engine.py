@@ -8,8 +8,8 @@ from datetime import datetime
 
 import pandas as pd
 
-from app.graph import get_llm
-from app.semantic import load_pack
+from backend.agent.graph import get_llm
+from backend.semantic import load_pack
 from backend.models import DataSource, Insight, jdump
 
 RULE_LABELS = {

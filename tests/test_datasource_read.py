@@ -2,7 +2,7 @@
 
 import pandas as pd
 
-from backend.services.datasource import (
+from backend.datasource.service import (
     _clean_rows, _read_file, count_rows, detect_encoding_and_sep, detect_file_type,
 )
 

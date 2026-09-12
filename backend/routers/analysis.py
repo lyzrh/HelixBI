@@ -10,7 +10,7 @@ from sqlalchemy.orm import Session
 from backend.db import get_db
 from backend.models import Message, Run, Session as DbSession, jdump, jload
 from backend.schemas import AnalyzeBody, ParseBody
-from backend.services import analysis_runner
+from backend.analysis import runtime as analysis_runner
 
 router = APIRouter(prefix="")
 
@@ -41,7 +41,7 @@ async def analyze(sid: int, body: AnalyzeBody, db: Session = Depends(get_db)):
     await _semaphore.acquire()
 
     # 请求作用域内：匹配已启用 Skill（few-shot 注入）+ 落 user message + running run
-    from backend.services import skill_engine
+    from backend.skills import engine as skill_engine
     skills = skill_engine.match_skills(db, body.question)
     skill_block = skill_engine.render_skill_prompt(skills)
 
@@ -96,8 +96,8 @@ async def analyze(sid: int, body: AnalyzeBody, db: Session = Depends(get_db)):
 @router.post("/sessions/{sid}/parse")
 def parse(sid: int, body: ParseBody, db: Session = Depends(get_db)):
     """仅跑意图解析（parse_intent），返回 QuerySpec 供前端确认。"""
-    from app.graph import parse_intent
-    from app.semantic import pack_for_file, render_semantic_prompt
+    from backend.agent.graph import parse_intent
+    from backend.semantic import pack_for_file, render_semantic_prompt
     from backend.models import DataSource
 
     try:
@@ -143,7 +143,7 @@ def export_run(rid: int, db: Session = Depends(get_db)):
     from fastapi.responses import Response
 
     from backend.models import Run
-    from backend.services.report_export import build_run_html
+    from backend.report.exporter import build_run_html
 
     run = db.get(Run, rid)
     if not run:

@@ -4,28 +4,51 @@
 
 ## 分层结构
 
+后端按**业务领域**（而非技术分层）组织，每个目录代表一项能力：
+
 ```
 React 前端 (frontend/)
    │  fetch + SSE 流解析
    ▼
-FastAPI (backend/, :8000)
-   ├── routers/   仅做参数校验与路由转发，不写业务逻辑
-   ├── services/  业务逻辑层（analysis_runner / skill_engine / insight_engine / …）
-   ├── models.py / schemas.py  ORM 与 API 模型，SQLite 元数据（WAL）
-   └── 调用 app/ 内核
-         ├── app/graph.py  LangGraph：parse_intent → generate_code → execute(自修复) → summarize → suggest_followups
-         ├── app/semantic.py + semantics/*.yaml  行业语义包渲染
-         ├── app/sandbox.py  Docker 无网络沙箱 + dahelper 结果契约
-         └── app/report.py   HTML 报告导出
+API 层 (backend/routers/, :8000)
+   │  仅参数校验与路由转发，不写业务逻辑
+   ▼
+领域层 (backend/ 下各领域目录)
+   ├── analysis/     Analysis Runtime：驱动分析链路、SSE 事件映射、落库；explore 自助分析
+   ├── skills/       Skill 沉淀 / 匹配 / 重放
+   ├── insights/     规则扫描 + 定时调度 + LLM 诊断
+   ├── datasource/   文件 / DB 接入与 parquet 物化
+   ├── semantic/     语义包运行时（读取并渲染 semantic_packs/）
+   └── report/       自包含 HTML 导出
+   ▼
+Agent 内核 (backend/agent/)
+   ├── graph.py     LangGraph：parse_intent → generate_code → execute(自修复) → summarize → suggest_followups
+   ├── prompts.py   各节点 system / user 提示词
+   ├── profiler.py  数据画像（注入 prompt 的紧凑 schema 摘要）
+   └── sandbox.py   Docker 无网络沙箱客户端 + dahelper 结果契约
+
+基础设施：backend/config.py（全局配置单一入口）· db.py（SQLite WAL）· models.py / schemas.py · seed.py
+配置：semantic_packs/*.yaml（业务语义唯一来源）
+独立执行环境：sandbox/（镜像，**不属于** backend 包）
 ```
 
 ## 必须遵守
 
-- **内核线性流程不可重构**：`app/graph.py` 的 LangGraph 链路保持线性，只允许加 `AgentState.skill_block` 这类最小钩子。扩展能力优先在 `backend/services/` 层实现。
-- **单向依赖**：`backend/` → `app/`；禁止 `app/` 反向 import `backend/`；前端只通过 HTTP/SSE 与后端通信。
+- **领域优先**：新增后端能力时先判断它属于哪个领域目录（analysis / skills / insights / datasource / semantic / report / agent）；不要新建 `services/`、`utils/` 这类"什么都放"的目录。
+- **API 层不写业务逻辑**：`backend/routers/` 只做参数校验与转发，业务实现放对应领域模块。
+- **依赖方向**：`routers/` → 领域模块 → `agent/` 内核 → `config`。领域模块之间穿透调用内部实现是不允许的；跨领域协作走公开入口（例如 Skill 需要重新生成分析时，调用 `backend/analysis/runtime.py`，而不是自己驱动图谱）。
+- **内核线性流程不可重构**：`backend/agent/graph.py` 的 LangGraph 链路保持线性，只允许加 `AgentState.skill_block` 这类最小钩子。扩展能力优先在领域层实现。
+- **配置单一入口**：路径 / LLM / 沙箱参数统一在 `backend/config.py`；不要在别处再造一份配置常量。设置中心热更新改的是同一个模块对象（`update_llm_config` / `invalidate_prefs_cache`）。
+- **语义层边界**：`semantic_packs/` 是**配置**（业务语义唯一来源），`backend/semantic/` 是**运行时**（加载 + 渲染）。改指标口径只改 YAML，不要改渲染代码。
 - **产物路径约定**：分析产物写 `runs/{run_id}/out`（result.json + PNG），由后端静态挂载 `/runs` 提供访问。
-- **语义包是口径唯一来源**：新增指标/维度先改 `semantics/*.yaml`，再考虑代码；不要在 prompt 或业务代码里硬编码指标定义。
 - **元数据库迁移**：改表结构需同步 `backend/models.py`、`backend/schemas.py`，新列在 `backend/db.py:_migrate` 补 ALTER TABLE，并在 `backend/seed.py` 回填存量数据。
+
+## 已知的后续重构（P2，本次未做）
+
+- `backend/routers/` → `backend/api/`，`config/db/models/schemas` → `backend/core/`：让"API 层"与"基础设施"的边界更显式。
+- `frontend/src/` 增加 `features/` 分域（analysis / skills / insights / dashboards / datasources / agents），把散落的组件、store、api 按功能收敛。
+
+`sandbox/` 与 `examples/` 保持独立，不并入 backend。
 
 ## 历史决策
 

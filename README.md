@@ -66,6 +66,10 @@ can always connect your own data.
 
 ## Architecture
 
+The backend is organised **by business domain**, not by technical layer: every directory
+under `backend/` owns one capability, and `routers/` is a thin API layer while the real
+logic lives in the domain modules.
+
 ```
 ┌───────────── React 18 + AntD 5 frontend (Vite) ─────────────┐
 │ Workbench / Conversational Analysis / Self-Service /        │
@@ -75,14 +79,17 @@ can always connect your own data.
                   SSE streaming (spec/code/step/answer/chart…)
 ┌───────────────────────────▼──────────────────────────────────┐
 │                    FastAPI backend (:8000)                    │
-│  routers/   analysis(SSE) sessions datasources agents skills │
-│             insights dashboards explore(SQL) settings usage  │
-│  services/  analysis_runner     # LangGraph wrapper + runs   │
-│             skill_engine       # capture / match / replay    │
-│             insight_engine     # rule scans + LLM diagnosis  │
-│             insight_scheduler  # scheduled scan loop         │
-│             datasource         # files + DB + parquet cache  │
-│  semantic/  industry packs (retail sales / manufacturing)    │
+│  routers/    API layer: analysis(SSE) sessions datasources    │
+│              agents skills insights dashboards explore(SQL)   │
+│              settings usage misc                              │
+│  agent/      Agent core: graph (LangGraph) + sandbox client   │
+│  analysis/   Analysis Runtime (driving + persistence) +       │
+│              self-service analytics (zero tokens)             │
+│  skills/     Skill capture / match / replay / few-shot        │
+│  insights/   rule scans + scheduler + LLM diagnosis           │
+│  datasource/ files + DB connections + parquet cache           │
+│  semantic/   semantic-pack runtime (reads semantic_packs/)    │
+│  report/     self-contained HTML export                       │
 │  SQLite metadata (WAL): sessions/messages/runs/datasources/  │
 │    agents/skills/insights/dashboards/settings/token usage    │
 └───────────────────────────┬──────────────────────────────────┘
@@ -94,6 +101,10 @@ can always connect your own data.
         File datasources mounted directly; database data materialized
         to parquet before entering the sandbox
 ```
+
+Configuration vs runtime boundary: `semantic_packs/` is **configuration** (the single
+source of truth for business semantics) while `backend/semantic/` is the **runtime**
+(loading and rendering them into prompts).
 
 ## Getting Started
 
@@ -174,18 +185,24 @@ For production, just run `npm run build`; the output is served statically by the
 ## Project Structure
 
 ```
-backend/                # FastAPI service
+backend/                # FastAPI service (organised by business domain)
   main.py               # entry point (CORS / static hosting / lifespan)
+  config.py             # single config entry (paths / LLM / sandbox / data)
+  db.py                 # SQLite engine (WAL)
   models.py schemas.py  # ORM (metadata tables) and API models
   seed.py               # built-in datasources / agents / skills / dashboards
-  routers/              # analysis sessions datasources agents skills
-                        # insights dashboards explore settings usage misc
-  services/             # analysis_runner skill_engine insight_engine
-                        # insight_scheduler datasource report_export
-semantics/              # industry semantic packs (retail_sales / manufacturing_production yaml)
-app/                    # LangGraph core
-  graph.py profiler.py sandbox.py prompts.py report.py semantic.py
-sandbox/                # sandbox image (pandas/pyarrow/matplotlib/CJK fonts + dahelper)
+  routers/              # API layer: analysis sessions datasources agents skills
+                        #   insights dashboards explore settings usage misc
+  agent/                # Agent core: graph prompts profiler sandbox
+  analysis/             # Analysis Runtime (runtime) + self-service (explore)
+  skills/               # Skill capture / match / replay
+  insights/             # rule scans (engine) + scheduler
+  datasource/           # file / DB access + parquet materialization
+  semantic/             # semantic-pack runtime (registry + render)
+  report/               # export (builder for runs / exporter for dashboards)
+semantic_packs/         # industry semantic packs (retail_sales / manufacturing_production yaml)
+sandbox/                # standalone execution environment: sandbox image
+                        #   (pandas/pyarrow/matplotlib/CJK fonts + dahelper contract)
 frontend/               # React + AntD + Zustand + Vite
   src/pages/            # Chat Workbench Explore Agents Skills Insights
                         # Dashboards Datasources Usage
@@ -226,6 +243,7 @@ execution, self-repair, and follow-up recommendation.
 
 - **R2**: dashboards rendered client-side (interactive ECharts instead of PNG), insight subscription push, multi-user support & permissions, i18n for the remaining pages (the zh/en toggle already covers navigation / workbench / settings)
 - **R3**: regression evaluation (fixed question sets for accuracy), visual semantic-pack editor, metric lineage
+- **Architecture (P2)**: `backend/routers/` → `api/` and `config/db/models/schemas` → `core/`; introduce `features/` domains in the frontend (see [.agents/rules/architecture.md](.agents/rules/architecture.md))
 
 ## License
 

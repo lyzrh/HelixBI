@@ -11,7 +11,7 @@ import pathlib
 import shutil
 import subprocess
 
-from .config import (
+from backend.config import (
     CODE_TIMEOUT_SECONDS,
     RUNS_DIR,
     SANDBOX_CPUS,

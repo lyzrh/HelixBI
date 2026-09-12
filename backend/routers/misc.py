@@ -7,9 +7,9 @@ from fastapi import APIRouter, Depends
 from sqlalchemy import func
 from sqlalchemy.orm import Session
 
-from app import config
-from app.sandbox import resolve_docker
-from app.semantic import list_packs
+from backend import config
+from backend.agent.sandbox import resolve_docker
+from backend.semantic import list_packs
 from backend.db import get_db
 from backend.models import Dashboard, DataSource, Insight, Run, SceneAgent, Session as DbSession, Skill, TokenUsage
 

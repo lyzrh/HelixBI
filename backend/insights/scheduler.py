@@ -13,7 +13,7 @@ from sqlalchemy import or_
 
 from backend.db import SessionLocal
 from backend.models import DataSource, Insight, SystemSetting, now_str
-from backend.services import insight_engine
+from backend.insights import engine as insight_engine
 
 CHECK_INTERVAL_SECONDS = 30
 DEFAULT_INTERVAL_MINUTES = 60

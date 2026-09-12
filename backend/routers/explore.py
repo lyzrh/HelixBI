@@ -1,6 +1,6 @@
 """自助分析路由（拖拽式图表）：参数校验 + 转发 explore_engine。
 
-业务逻辑（pandas 聚合引擎、SQL 查询）在 backend/services/explore_engine.py，
+业务逻辑（pandas 聚合引擎、SQL 查询）在 backend/analysis/explore.py，
 本路由按项目架构规则只做校验与错误码转换。
 """
 
@@ -10,7 +10,7 @@ from sqlalchemy.orm import Session
 from backend.db import get_db
 from backend.models import DataSource
 from backend.schemas import ExploreBody, SqlBody
-from backend.services import explore_engine
+from backend.analysis import explore as explore_engine
 
 router = APIRouter(prefix="/explore")
 

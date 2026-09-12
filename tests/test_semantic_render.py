@@ -1,6 +1,6 @@
 """语义包渲染：同义词 / 示例问题进入 prompt，可选指标按数据过滤。"""
 
-from app.semantic import load_pack, render_semantic_prompt
+from backend.semantic import load_pack, render_semantic_prompt
 
 PACK_ID = "retail_sales"
 
