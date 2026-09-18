@@ -80,6 +80,9 @@ def update_llm_config(base_url: str | None = None, api_key: str | None = None,
 DATA_DIR.mkdir(parents=True, exist_ok=True)
 MATERIALIZED_DIR.mkdir(parents=True, exist_ok=True)
 UPLOADS_DIR.mkdir(parents=True, exist_ok=True)
+# runs 目录被 main.py 挂载为静态目录（StaticFiles 要求存在），
+# 全新环境（如 CI checkout）没有该目录时会在 import backend.main 时崩溃
+RUNS_DIR.mkdir(parents=True, exist_ok=True)
 
 __all__ = [
     "CODE_TIMEOUT_SECONDS", "DATA_DIR", "DB_PATH", "ENV_PATH", "FRONTEND_DIST",
