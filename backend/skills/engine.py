@@ -24,7 +24,9 @@ PLACEHOLDER = "{name}"
 # ---- 沉淀 ----
 
 def capture_from_run(db, run_id: int, name: str, description: str = "",
-                     tags: list[str] | None = None) -> dict:
+                     tags: list[str] | None = None,
+                     workspace_id: int | None = None,
+                     user_id: int | None = None) -> dict:
     run = db.get(Run, run_id)
     if not run:
         raise ValueError("运行记录不存在")
@@ -42,6 +44,8 @@ def capture_from_run(db, run_id: int, name: str, description: str = "",
         pack_id=pack_id, question=run.question, spec=run.spec,
         code=run.code, columns_json=jdump(sorted(columns)),
         source_run_id=run_id, tags=jdump(tags or []),
+        scope="user" if (workspace_id is None and user_id is not None) else "workspace",
+        workspace_id=workspace_id, user_id=user_id,
     )
     db.add(skill)
     db.flush()
@@ -63,12 +67,17 @@ def _tokenize(text: str) -> set[str]:
 
 
 def match_skills(db, question: str, pack_id: str | None = None,
-                 limit: int = 2, min_score: int = 2) -> list:
+                 limit: int = 2, min_score: int = 2,
+                 workspace_id: int | None = None,
+                 user_id: int | None = None) -> list:
     """Skill 路由：词面 2-gram + 语义包加权 + **分析类型一致性**。
 
     为什么需要第三个信号：仅靠词面，「按从高到低排序」与「环比对比」这类
     **同指标、不同口径**的问题无法区分，Top1 会误路由到错误的分析路径。
     分析类型由确定性解析器（`backend.semantic.resolver`）给出，零 token。
+
+    作用域隔离：workspace_id 传入时只检索 global + 本工作区 + 本人 scoped 的
+    Skill，避免 Sales 工作区的 Skill 被 Marketing 工作区错误检索。
     """
     from backend.semantic import resolve
 
@@ -90,8 +99,15 @@ def match_skills(db, question: str, pack_id: str | None = None,
                 resolve(skill.question, pid).get("analysis_type", "unknown") if pid else "unknown")
         return skill_type_cache[skill.id]
 
+    query = db.query(Skill).filter(Skill.enabled == True)  # noqa: E712
+    if workspace_id is not None:
+        query = query.filter(
+            (Skill.scope == "global")
+            | (Skill.workspace_id == workspace_id)
+            | ((Skill.scope == "user") & (Skill.user_id == user_id))
+        )
     scored = []
-    for skill in db.query(Skill).filter(Skill.enabled == True).all():  # noqa: E712
+    for skill in query.all():
         corpus = skill.question + " " + skill.name + " " + " ".join(jload(skill.tags, []))
         score = len(q_tokens & _tokenize(corpus))
         if pack_id and skill.pack_id == pack_id:
@@ -122,7 +138,7 @@ def render_skill_prompt(skills: list) -> str:
 # ---- 运行（双模式）----
 
 def run_skill(skill_pk: int, session_id: int | None, data_source_ids: list[int],
-              on_event=None) -> dict:
+              on_event=None, workspace_id: int | None = None) -> dict:
     """在工作线程中运行 Skill，返回落库摘要。"""
     t0 = time.time()
     emit = on_event or (lambda *_: None)
@@ -131,6 +147,13 @@ def run_skill(skill_pk: int, session_id: int | None, data_source_ids: list[int],
             skill = db.get(Skill, skill_pk)
             if not skill or not skill.enabled:
                 raise ValueError("Skill 不存在或已禁用")
+            # Skill 作用域：本工作区 / global / 本人 可运行，其余拒绝
+            if workspace_id is not None:
+                visible = (skill.scope == "global"
+                           or skill.workspace_id == workspace_id
+                           or skill.workspace_id is None)  # 历史数据视为全局
+                if not visible:
+                    raise PermissionError("Skill 不属于当前工作区")
             if session_id is None:
                 session = DbSession(title=f"Skill：{skill.name}")
                 db.add(session)
@@ -139,11 +162,14 @@ def run_skill(skill_pk: int, session_id: int | None, data_source_ids: list[int],
                 db.commit()
 
             if not data_source_ids:
-                # 未指定则用 Skill 关联语义包下的第一个数据源
-                sources = db.query(DataSource).filter(
-                    DataSource.pack_id == skill.pack_id).all()
+                # 未指定则用 Skill 关联语义包下的第一个数据源（限本工作区）
+                q = db.query(DataSource).filter(DataSource.pack_id == skill.pack_id)
+                sources = (q.filter(DataSource.workspace_id == workspace_id).all()
+                           if workspace_id is not None else q.all())
                 if not sources:
-                    sources = db.query(DataSource).order_by(DataSource.id).all()
+                    q2 = db.query(DataSource)
+                    sources = (q2.filter(DataSource.workspace_id == workspace_id).all()
+                               if workspace_id is not None else q2.order_by(DataSource.id).all())
                 if not sources:
                     raise ValueError("没有可用数据源，请先上传或连接数据")
                 data_source_ids = [sources[0].id]

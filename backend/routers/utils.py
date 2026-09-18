@@ -4,12 +4,14 @@ import io
 import urllib.parse
 
 import pandas as pd
-from fastapi import APIRouter
+from fastapi import APIRouter, Depends
 from fastapi.responses import Response
 
+from backend.auth.deps import get_current_context
 from backend.schemas import ExportTableBody
 
-router = APIRouter(prefix="/utils")
+router = APIRouter(prefix="/utils",
+                   dependencies=[Depends(get_current_context)])
 
 
 @router.post("/export_table")

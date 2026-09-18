@@ -9,10 +9,12 @@ from sqlalchemy.orm import Session
 
 from backend import config
 from backend.agent.graph import get_llm, reset_llm
+from backend.auth.deps import get_current_context, require_permission
 from backend.db import get_db
 from backend.models import SystemSetting, now_str
 
-router = APIRouter(prefix="/settings")
+router = APIRouter(prefix="/settings",
+                   dependencies=[Depends(get_current_context)])
 
 K_PROFILE = "user_profile"
 DEFAULT_PROFILE = {"nickname": "数据探索者", "role": "数据分析师", "avatar_color": "#2563eb"}

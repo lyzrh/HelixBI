@@ -65,3 +65,19 @@ def _migrate() -> None:
         if "trace" not in run_cols:
             conn.exec_driver_sql("ALTER TABLE runs ADD COLUMN trace TEXT DEFAULT '{}'")
             conn.commit()
+        # ---- 认证 / 工作区 / Skill 作用域（feat/user-auth-workspace-rbac）----
+        ds_cols = {row[1] for row in conn.exec_driver_sql("PRAGMA table_info(data_sources)")}
+        if "workspace_id" not in ds_cols:
+            conn.exec_driver_sql("ALTER TABLE data_sources ADD COLUMN workspace_id INTEGER")
+            conn.commit()
+        sk_cols = {row[1] for row in conn.exec_driver_sql("PRAGMA table_info(skills)")}
+        for col, ddl in (("scope", "TEXT DEFAULT 'workspace'"),
+                         ("workspace_id", "INTEGER"), ("user_id", "INTEGER")):
+            if col not in sk_cols:
+                conn.exec_driver_sql(f"ALTER TABLE skills ADD COLUMN {col} {ddl}")
+                conn.commit()
+        sess_cols = {row[1] for row in conn.exec_driver_sql("PRAGMA table_info(sessions)")}
+        for col in ("user_id", "workspace_id"):
+            if col not in sess_cols:
+                conn.exec_driver_sql(f"ALTER TABLE sessions ADD COLUMN {col} INTEGER")
+                conn.commit()

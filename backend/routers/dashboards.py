@@ -6,6 +6,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import Response
 from sqlalchemy.orm import Session
 
+from backend.auth.deps import get_current_context, require_permission
 from backend.db import get_db
 from backend.models import Dashboard, DashboardItem, Insight
 from backend.schemas import (
@@ -14,7 +15,9 @@ from backend.schemas import (
 )
 from backend.report.exporter import build_dashboard_html
 
-router = APIRouter(prefix="/dashboards")
+router = APIRouter(prefix="/dashboards",
+                   dependencies=[Depends(get_current_context),
+                                 Depends(require_permission("dashboard:read"))])
 
 
 @router.get("")
@@ -29,7 +32,8 @@ def list_dashboards(db: Session = Depends(get_db)):
 
 
 @router.post("")
-def create_dashboard(body: DashboardCreate, db: Session = Depends(get_db)):
+def create_dashboard(body: DashboardCreate, db: Session = Depends(get_db),
+                     _ctx=Depends(require_permission("dashboard:write"))):
     obj = Dashboard(name=body.name, description=body.description)
     db.add(obj)
     db.flush()
@@ -51,7 +55,8 @@ def get_dashboard(did: int, db: Session = Depends(get_db)):
 
 
 @router.patch("/{did}")
-def patch_dashboard(did: int, body: DashboardPatch, db: Session = Depends(get_db)):
+def patch_dashboard(did: int, body: DashboardPatch, db: Session = Depends(get_db),
+                    _ctx=Depends(require_permission("dashboard:write"))):
     d = db.get(Dashboard, did)
     if not d:
         raise HTTPException(404, "仪表板不存在")
@@ -64,7 +69,8 @@ def patch_dashboard(did: int, body: DashboardPatch, db: Session = Depends(get_db
 
 
 @router.delete("/{did}")
-def delete_dashboard(did: int, db: Session = Depends(get_db)):
+def delete_dashboard(did: int, db: Session = Depends(get_db),
+                     _ctx=Depends(require_permission("dashboard:write"))):
     d = db.get(Dashboard, did)
     if not d:
         raise HTTPException(404, "仪表板不存在")
@@ -75,7 +81,8 @@ def delete_dashboard(did: int, db: Session = Depends(get_db)):
 
 
 @router.post("/{did}/items")
-def add_item(did: int, body: DashboardItemCreate, db: Session = Depends(get_db)):
+def add_item(did: int, body: DashboardItemCreate, db: Session = Depends(get_db),
+             _ctx=Depends(require_permission("dashboard:write"))):
     d = db.get(Dashboard, did)
     if not d:
         raise HTTPException(404, "仪表板不存在")
@@ -100,7 +107,8 @@ def add_item(did: int, body: DashboardItemCreate, db: Session = Depends(get_db))
 
 
 @router.delete("/items/{item_id}")
-def delete_item(item_id: int, db: Session = Depends(get_db)):
+def delete_item(item_id: int, db: Session = Depends(get_db),
+                _ctx=Depends(require_permission("dashboard:write"))):
     item = db.get(DashboardItem, item_id)
     if not item:
         raise HTTPException(404, "仪表板条目不存在")
@@ -128,7 +136,8 @@ def patch_item(item_id: int, body: DashboardItemPatch,
 
 
 @router.post("/{did}/items/reorder")
-def reorder_items(did: int, body: ItemReorderBody, db: Session = Depends(get_db)):
+def reorder_items(did: int, body: ItemReorderBody, db: Session = Depends(get_db),
+                  _ctx=Depends(require_permission("dashboard:write"))):
     """按前端给定的 id 顺序重排条目。"""
     items = {i.id: i for i in db.query(DashboardItem).filter(
         DashboardItem.dashboard_id == did).all()}

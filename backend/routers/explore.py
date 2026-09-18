@@ -7,12 +7,16 @@
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 
+from backend.auth.context import UserContext
+from backend.auth.deps import get_current_context, require_permission
 from backend.db import get_db
 from backend.models import DataSource
 from backend.schemas import ExploreBody, SqlBody
 from backend.analysis import explore as explore_engine
 
-router = APIRouter(prefix="/explore")
+router = APIRouter(prefix="/explore",
+                   dependencies=[Depends(get_current_context),
+                                 Depends(require_permission("datasource:read"))])
 
 
 def _get_ds(db: Session, data_source_id: int) -> DataSource:
@@ -42,7 +46,8 @@ def explore_profile(data_source_id: int, db: Session = Depends(get_db)):
 
 
 @router.post("/query")
-def explore_query(body: ExploreBody, db: Session = Depends(get_db)):
+def explore_query(body: ExploreBody, db: Session = Depends(get_db),
+                  _ctx: UserContext = Depends(require_permission("analysis:execute"))):
     ds = _get_ds(db, body.data_source_id)
     if not body.metrics:
         raise HTTPException(400, "请至少拖入一个指标（纵轴）")
@@ -53,7 +58,8 @@ def explore_query(body: ExploreBody, db: Session = Depends(get_db)):
 
 
 @router.post("/sql")
-def explore_sql(body: SqlBody, db: Session = Depends(get_db)):
+def explore_sql(body: SqlBody, db: Session = Depends(get_db),
+                _ctx: UserContext = Depends(require_permission("sql:execute"))):
     """只读 SQL 查询：数据载入 sqlite 内存库执行，支持标准 SELECT 语法。
 
     对应 FineDataLink「库表管理」的直接 SQL 查询能力；纯本地计算，零 token。

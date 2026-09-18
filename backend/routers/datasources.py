@@ -6,6 +6,8 @@ from pathlib import Path
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
 from sqlalchemy.orm import Session
 
+from backend.auth.context import UserContext
+from backend.auth.deps import get_current_context, require_permission
 from backend.semantic import assign_pack, infer_pack, list_packs, load_pack
 from backend.config import MAX_UPLOAD_MB, UPLOADS_DIR
 from backend.db import get_db
@@ -19,7 +21,8 @@ from backend.datasource.service import (
 )
 from backend.models import jdump
 
-router = APIRouter(prefix="/datasources")
+router = APIRouter(prefix="/datasources",
+                   dependencies=[Depends(get_current_context)])
 
 ALLOWED_EXT = {".csv", ".tsv", ".xlsx", ".xls", ".json", ".parquet"}
 
@@ -45,7 +48,8 @@ def _decode_form_text(value: str) -> str:
 
 @router.post("/upload")
 async def upload_file(file: UploadFile = File(...), name: str = Form(""),
-                      db: Session = Depends(get_db)):
+                      db: Session = Depends(get_db),
+                      ctx: UserContext = Depends(require_permission("datasource:write"))):
     original = _decode_form_text(file.filename or "upload.csv")
     suffix = Path(original).suffix.lower()
     if suffix not in ALLOWED_EXT:
@@ -82,6 +86,7 @@ async def upload_file(file: UploadFile = File(...), name: str = Form(""),
         file_name=dest.name, file_type=detect_file_type(str(dest)),
         size_bytes=size_bytes, pack_id=pack_id, columns_json=jdump(columns),
         row_count=count_rows(str(dest)),
+        workspace_id=ctx.workspace_id,
     )
     db.add(obj)
     db.flush()
@@ -90,7 +95,8 @@ async def upload_file(file: UploadFile = File(...), name: str = Form(""),
 
 
 @router.post("/db")
-def create_db_source(body: DataSourceDbCreate, db: Session = Depends(get_db)):
+def create_db_source(body: DataSourceDbCreate, db: Session = Depends(get_db),
+                     ctx: UserContext = Depends(require_permission("datasource:write"))):
     cfg = body.config
     ok, msg = test_connection(
         cfg.db_type, cfg.host, cfg.port, cfg.database,
@@ -104,7 +110,7 @@ def create_db_source(body: DataSourceDbCreate, db: Session = Depends(get_db)):
         name=body.name, type="db", db_type=cfg.db_type,
         host=cfg.host or "", port=cfg.port, database_name=cfg.database or cfg.sqlite_path,
         username=cfg.username or "", password=cfg.password or "",
-        pack_id=body.pack_id,
+        pack_id=body.pack_id, workspace_id=ctx.workspace_id,
     )
     db.add(obj)
     db.flush()
@@ -113,7 +119,8 @@ def create_db_source(body: DataSourceDbCreate, db: Session = Depends(get_db)):
 
 
 @router.post("/test")
-def test_db(body: DbTestBody):
+def test_db(body: DbTestBody,
+            _ctx: UserContext = Depends(require_permission("datasource:write"))):
     cfg = body.config
     ok, msg = test_connection(
         cfg.db_type, cfg.host, cfg.port, cfg.database,
@@ -123,8 +130,13 @@ def test_db(body: DbTestBody):
 
 
 @router.get("")
-def list_data_sources(db: Session = Depends(get_db)):
-    return [ds.to_dict() for ds in db.query(DataSource).order_by(DataSource.id).all()]
+def list_data_sources(db: Session = Depends(get_db),
+                      ctx: UserContext = Depends(get_current_context)):
+    # 数据源按工作区隔离：本工作区 + 历史全局数据（workspace_id 为空）
+    return [ds.to_dict() for ds in db.query(DataSource)
+            .filter((DataSource.workspace_id == ctx.workspace_id)
+                    | (DataSource.workspace_id.is_(None)))
+            .order_by(DataSource.id).all()]
 
 
 @router.get("/{dsid}")
@@ -162,7 +174,8 @@ def get_preview(dsid: int, table: str = "", limit: int = 50,
 
 @router.post("/{dsid}/materialize")
 def materialize_source(dsid: int, body: MaterializeBody,
-                       db: Session = Depends(get_db)):
+                       db: Session = Depends(get_db),
+                       _ctx: UserContext = Depends(require_permission("datasource:write"))):
     ds = db.get(DataSource, dsid)
     if not ds:
         raise HTTPException(404, "数据源不存在")
@@ -178,7 +191,8 @@ def materialize_source(dsid: int, body: MaterializeBody,
 
 @router.patch("/{dsid}")
 def patch_data_source(dsid: int, body: DataSourcePatch,
-                      db: Session = Depends(get_db)):
+                      db: Session = Depends(get_db),
+                      _ctx: UserContext = Depends(require_permission("datasource:write"))):
     ds = db.get(DataSource, dsid)
     if not ds:
         raise HTTPException(404, "数据源不存在")
@@ -196,7 +210,8 @@ def patch_data_source(dsid: int, body: DataSourcePatch,
 
 
 @router.delete("/{dsid}")
-def delete_data_source(dsid: int, db: Session = Depends(get_db)):
+def delete_data_source(dsid: int, db: Session = Depends(get_db),
+                       _ctx: UserContext = Depends(require_permission("datasource:write"))):
     ds = db.get(DataSource, dsid)
     if not ds:
         raise HTTPException(404, "数据源不存在")

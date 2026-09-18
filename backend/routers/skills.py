@@ -7,13 +7,17 @@ from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
 
+from backend.auth.context import UserContext
+from backend.auth.deps import get_current_context, require_permission
 from backend.db import get_db
 from backend.models import Skill
 from backend.routers.analysis import SSE_HEADERS, _semaphore, _sse_frame
 from backend.schemas import SkillCreate, SkillFromRun, SkillPatch, SkillRunBody
 from backend.skills import engine as skill_engine
 
-router = APIRouter(prefix="/skills")
+router = APIRouter(prefix="/skills",
+                   dependencies=[Depends(get_current_context),
+                                 Depends(require_permission("skill:read"))])
 
 
 @router.get("")
@@ -22,12 +26,14 @@ def list_skills(db: Session = Depends(get_db)):
 
 
 @router.post("")
-def create_skill(body: SkillCreate, db: Session = Depends(get_db)):
+def create_skill(body: SkillCreate, db: Session = Depends(get_db),
+                 ctx: UserContext = Depends(require_permission("skill:write"))):
     if not body.code.strip():
         raise HTTPException(400, "Skill 必须包含可执行代码")
     obj = Skill(name=body.name, description=body.description, pack_id=body.pack_id,
                 question=body.question, code=body.code, tags=json.dumps(
-                    body.tags, ensure_ascii=False))
+                    body.tags, ensure_ascii=False),
+                scope="workspace", workspace_id=ctx.workspace_id, user_id=ctx.user_id)
     db.add(obj)
     db.flush()
     db.commit()
@@ -35,10 +41,13 @@ def create_skill(body: SkillCreate, db: Session = Depends(get_db)):
 
 
 @router.post("/from-run")
-def from_run(body: SkillFromRun, db: Session = Depends(get_db)):
+def from_run(body: SkillFromRun, db: Session = Depends(get_db),
+             ctx: UserContext = Depends(require_permission("skill:write"))):
     try:
         return skill_engine.capture_from_run(db, body.run_id, body.name,
-                                             body.description, body.tags)
+                                             body.description, body.tags,
+                                             workspace_id=ctx.workspace_id,
+                                             user_id=ctx.user_id)
     except ValueError as exc:
         raise HTTPException(400, str(exc))
 
@@ -52,7 +61,8 @@ def get_skill(skid: int, db: Session = Depends(get_db)):
 
 
 @router.patch("/{skid}")
-def patch_skill(skid: int, body: SkillPatch, db: Session = Depends(get_db)):
+def patch_skill(skid: int, body: SkillPatch, db: Session = Depends(get_db),
+                _ctx: UserContext = Depends(require_permission("skill:write"))):
     s = db.get(Skill, skid)
     if not s:
         raise HTTPException(404, "Skill 不存在")
@@ -69,7 +79,8 @@ def patch_skill(skid: int, body: SkillPatch, db: Session = Depends(get_db)):
 
 
 @router.delete("/{skid}")
-def delete_skill(skid: int, db: Session = Depends(get_db)):
+def delete_skill(skid: int, db: Session = Depends(get_db),
+                 _ctx: UserContext = Depends(require_permission("skill:write"))):
     s = db.get(Skill, skid)
     if not s:
         raise HTTPException(404, "Skill 不存在")
@@ -81,7 +92,8 @@ def delete_skill(skid: int, db: Session = Depends(get_db)):
 
 
 @router.post("/{skid}/run")
-async def run_skill(skid: int, body: SkillRunBody, db: Session = Depends(get_db)):
+async def run_skill(skid: int, body: SkillRunBody, db: Session = Depends(get_db),
+                    _ctx: UserContext = Depends(require_permission("analysis:execute"))):
     s = db.get(Skill, skid)
     if not s:
         raise HTTPException(404, "Skill 不存在")
@@ -104,6 +116,7 @@ async def run_skill(skid: int, body: SkillRunBody, db: Session = Depends(get_db)
                 None,
                 lambda: skill_engine.run_skill(
                     skid, body.session_id, body.data_source_ids, on_event,
+                    workspace_id=_ctx.workspace_id,
                 ),
             )
         finally:
