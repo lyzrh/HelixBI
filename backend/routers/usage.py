@@ -6,10 +6,12 @@ from fastapi import APIRouter, Depends
 from sqlalchemy import func, text
 from sqlalchemy.orm import Session
 
+from backend.auth.deps import get_current_context, require_permission
 from backend.db import get_db
 from backend.models import TokenUsage
 
-router = APIRouter(prefix="/usage")
+router = APIRouter(prefix="/usage",
+                   dependencies=[Depends(get_current_context)])
 
 
 @router.get("/summary")

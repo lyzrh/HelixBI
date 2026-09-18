@@ -4,12 +4,14 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
+from backend.auth.deps import get_current_context, require_permission
 from backend.db import get_db
 from backend.models import DataSource, Insight, now_str
 from backend.schemas import InsightGenerateBody, InsightPatch
 from backend.insights import engine as insight_engine, scheduler as insight_scheduler
 
-router = APIRouter(prefix="/insights")
+router = APIRouter(prefix="/insights",
+                   dependencies=[Depends(get_current_context)])
 
 
 @router.post("/generate")

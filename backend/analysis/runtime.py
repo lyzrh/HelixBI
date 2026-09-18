@@ -36,23 +36,33 @@ def run_analysis_stream(
     agent_id: int | None = None,
     on_event=None,
     skill_ids: list[int] | None = None,
+    user_context: dict | None = None,
 ) -> dict:
     """在工作线程中执行完整分析流，返回最终落库结果摘要。
 
     全过程记入 `Run.trace`（分阶段耗时 / LLM 调用与 token / 口径解析 / 校验结论）。
     **失败同样留痕**——排查问题时，失败的那一轮往往才是最需要看的。
+    user_context：可信后端解析的 UserContext 字典（可为空 = 匿名旧链路）。
     """
     t0 = time.time()
     emit = on_event or (lambda *_: None)
     stages: list[dict] = []
     try:
+        # Tool 级权限检查（纵深防御的第二道门）：API 层已拦一道，
+        # 这里再拦一道，Viewer 绕过前端直调也无法推进分析链路。
+        if user_context:
+            from backend.auth.context import permission_checker
+
+            permission_checker.require(user_context, "analysis:execute")
         with SessionLocal() as db:
-            files, semantic_block, semantic_meta = _prepare(db, data_source_ids, agent_id, emit)
+            files, semantic_block, semantic_meta = _prepare(db, data_source_ids, agent_id,
+                                                            emit, user_context)
             history = _history_from_session(db, session_id)
         final, stages = _drive(run_pk, question, files, history, spec,
-                               semantic_block, skill_block, emit, session_id=session_id)
+                               semantic_block, skill_block, emit, session_id=session_id,
+                               user_context=user_context)
         trace = _build_trace(run_pk, question, t0, stages, final, semantic_meta,
-                             skill_block, skill_ids)
+                             skill_block, skill_ids, user_context)
         with SessionLocal() as db:
             summary = _persist_result(db, run_pk, session_id, question, data_source_ids,
                                       final, int((time.time() - t0) * 1000), trace)
@@ -82,11 +92,20 @@ def run_analysis_stream(
 # ---- 准备阶段：数据源 → 文件映射 + 语义块 ----
 
 def _prepare(db, data_source_ids: list[int], agent_id: int | None,
-             emit) -> tuple[dict, str, dict]:
+             emit, user_context: dict | None = None) -> tuple[dict, str, dict]:
     sources = [db.get(DataSource, i) for i in data_source_ids]
     sources = [s for s in sources if s]
     if not sources:
         raise ValueError("未选择任何有效的数据源，请先在对话中选择或上传数据")
+
+    # 数据作用域（data_scope）：数据源属于工作区；本工作区或历史全局数据可见，
+    # 其他工作区的数据源即使拿到 id 也不能进入沙箱。
+    if user_context:
+        ws_id = user_context.get("workspace_id")
+        sources = [s for s in sources
+                   if s.workspace_id in (ws_id, None)]
+    if not sources:
+        raise PermissionError("所选数据源不属于当前工作区，已拒绝访问")
 
     files: dict[str, str] = {}
     for ds in sources:
@@ -139,7 +158,7 @@ def _history_from_session(db, session_id: int, limit: int = 3) -> list[dict]:
 # ---- 驱动阶段：事件映射 ----
 
 def _drive(run_pk, question, files, history, spec, semantic_block, skill_block, emit,
-           session_id=None) -> tuple[dict, list[dict]]:
+           session_id=None, user_context: dict | None = None) -> tuple[dict, list[dict]]:
     """驱动图谱并把每个节点的耗时记进 stages（供 trace 使用）。
 
     `stream_analysis` 每完成一个节点才 yield，因此"上一次 yield 到这一次 yield
@@ -153,7 +172,7 @@ def _drive(run_pk, question, files, history, spec, semantic_block, skill_block, 
     for node, delta, merged in stream_analysis(
         question, files, history=history, spec=spec,
         semantic_block=semantic_block, skill_block=skill_block,
-        run_id=run_pk, session_id=session_id,
+        run_id=run_pk, session_id=session_id, user_context=user_context,
     ):
         now = time.time()
         stage = {

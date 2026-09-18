@@ -6,11 +6,13 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 
 from backend.semantic import list_packs
+from backend.auth.deps import get_current_context, require_permission
 from backend.db import get_db
 from backend.models import DataSource, SceneAgent
 from backend.schemas import AgentCreate, AgentPatch
 
-router = APIRouter(prefix="/agents")
+router = APIRouter(prefix="/agents",
+                   dependencies=[Depends(get_current_context)])
 
 
 @router.get("")

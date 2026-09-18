@@ -1,4 +1,4 @@
-"""幂等 seeding：示例数据源、场景 Agent、默认仪表板、预置 Skill。
+"""幂等 seeding：示例数据源、场景 Agent、默认仪表板、预置 Skill、RBAC 基础数据。
 
 只在对应表为空时执行，可重复启动。内置 Skill 的 code 使用 {name} 占位
 文件名，replay 前按当前数据源名替换（skill_engine 负责）。
@@ -8,8 +8,44 @@ import shutil
 
 from sqlalchemy.orm import Session
 
-from backend.models import Dashboard, DataSource, SceneAgent, Skill
+from backend.models import (
+    Dashboard, DataSource, SceneAgent, Skill,
+    Permission, Role, RolePermission, User, Workspace, WorkspaceMember,
+)
 from backend.datasource.service import count_rows, read_columns
+
+# ---- RBAC 基础数据 ----
+
+ROLES = [
+    ("admin", "管理员", "工作区全部权限，含成员与工作区管理"),
+    ("analyst", "分析师", "可创建分析、执行 SQL、写数据源与 Skill"),
+    ("viewer", "查看者", "只读：查看数据源、仪表板与 Skill，不可执行分析"),
+]
+
+PERMISSIONS = [
+    ("datasource:read", "查看数据源"),
+    ("datasource:write", "创建/修改/删除数据源"),
+    ("sql:execute", "执行 SQL 查询"),
+    ("analysis:create", "创建会话"),
+    ("analysis:execute", "执行 AI 分析"),
+    ("dashboard:read", "查看仪表板"),
+    ("dashboard:write", "编辑仪表板"),
+    ("skill:read", "查看 Skill"),
+    ("skill:write", "创建/修改 Skill"),
+    ("workspace:manage", "管理工作区"),
+    ("member:manage", "管理成员与角色"),
+]
+
+ROLE_PERMISSIONS = {
+    "admin": [p[0] for p in PERMISSIONS],
+    "analyst": [
+        "datasource:read", "datasource:write", "sql:execute",
+        "analysis:create", "analysis:execute",
+        "dashboard:read", "dashboard:write",
+        "skill:read", "skill:write",
+    ],
+    "viewer": ["datasource:read", "dashboard:read", "skill:read"],
+}
 
 EXAMPLES = [
     ("sample_sales.csv", "零售销售示例数据", "retail_sales"),
@@ -137,11 +173,54 @@ dahelper.save_text(f"达成率最低的产线为 {worst['产线']}（{worst['达
 
 
 def run(db: Session) -> None:
+    _seed_rbac(db)
     _seed_data_sources(db)
     _seed_agents(db)
     _seed_dashboards(db)
     _seed_skills(db)
     db.commit()
+
+
+def _seed_rbac(db: Session) -> None:
+    """角色 / 权限 / 默认工作区 / 默认管理员。幂等。"""
+    from backend.auth.security import hash_password
+
+    for code, perms in ROLE_PERMISSIONS.items():
+        for p in perms:
+            exists = (db.query(RolePermission)
+                      .filter(RolePermission.role_code == code,
+                              RolePermission.permission_code == p).first())
+            if not exists:
+                db.add(RolePermission(role_code=code, permission_code=p))
+    for code, name, desc in ROLES:
+        if not db.get(Role, code):
+            db.add(Role(code=code, name=name, description=desc))
+    for code, name in PERMISSIONS:
+        if not db.get(Permission, code):
+            db.add(Permission(code=code, name=name))
+    db.flush()
+
+    ws = db.query(Workspace).filter(Workspace.name == "默认工作区").first()
+    if not ws:
+        ws = Workspace(name="默认工作区", description="内置示例数据所在工作区")
+        db.add(ws)
+        db.flush()
+        # 内置示例数据源归属默认工作区
+        for ds in db.query(DataSource).filter(DataSource.workspace_id.is_(None)).all():
+            ds.workspace_id = ws.id
+
+    if not db.query(User).filter(User.username == "admin").first():
+        admin = User(username="admin", display_name="管理员",
+                     password_hash=hash_password("admin123"))
+        db.add(admin)
+        db.flush()
+        db.add(WorkspaceMember(workspace_id=ws.id, user_id=admin.id, role_code="admin"))
+
+    # 历史匿名 Skill 归入默认工作区（scope=workspace）
+    if ws.id:
+        for skill in db.query(Skill).filter(
+                Skill.workspace_id.is_(None), Skill.builtin == True).all():  # noqa: E712
+            skill.workspace_id = ws.id
 
 
 def _seed_data_sources(db: Session) -> None:

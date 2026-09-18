@@ -2,9 +2,10 @@
 
 from fastapi import APIRouter
 
-from backend.routers import agents, analysis, dashboards, datasources, explore, insights, misc, sessions, settings, skills, usage, utils
+from backend.routers import agents, auth, analysis, dashboards, datasources, explore, insights, misc, sessions, settings, skills, usage, utils
 
 api_router = APIRouter(prefix="/api")
+api_router.include_router(auth.router)
 api_router.include_router(misc.router)
 api_router.include_router(sessions.router)
 api_router.include_router(analysis.router)

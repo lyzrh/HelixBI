@@ -1,4 +1,4 @@
-"""SQLAlchemy 2.0 ORM 模型：元数据库 data/app.db 的 9 张表。
+"""SQLAlchemy 2.0 ORM 模型：元数据库 data/app.db 的表。
 
 约定：时间戳存 ISO 文本；JSON 字段存 TEXT（json.dumps ensure_ascii=False）。
 """
@@ -39,11 +39,15 @@ class Session(Base):
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     title: Mapped[str] = mapped_column(String(200), default="新会话")
     agent_id: Mapped[int | None] = mapped_column(Integer, nullable=True)  # → scene_agents
+    # 会话归属（创建者与所在工作区）；NULL 视为历史匿名会话
+    user_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    workspace_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
     created_at: Mapped[str] = mapped_column(String(19), default=now_str)
     updated_at: Mapped[str] = mapped_column(String(19), default=now_str, onupdate=now_str)
 
     def to_dict(self) -> dict:
         return {"id": self.id, "title": self.title, "agent_id": self.agent_id,
+                "user_id": self.user_id, "workspace_id": self.workspace_id,
                 "created_at": self.created_at, "updated_at": self.updated_at}
 
 
@@ -113,6 +117,8 @@ class DataSource(Base):
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     name: Mapped[str] = mapped_column(String(255), unique=True)
     type: Mapped[str] = mapped_column(String(8))  # file | db
+    # 数据源归属工作区（Workspace → DataSource）；NULL 视为全局共享（历史数据）
+    workspace_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
     # file 源
     file_path: Mapped[str | None] = mapped_column(Text, nullable=True)
     # 沙箱挂载用真实存储文件名（含扩展名），让生成代码能选对读取函数
@@ -174,6 +180,10 @@ class Skill(Base):
     success_count: Mapped[int] = mapped_column(Integer, default=0)
     enabled: Mapped[bool] = mapped_column(Boolean, default=True)
     builtin: Mapped[bool] = mapped_column(Boolean, default=False)
+    # Skill 作用域：global（所有人可见）/ workspace / user
+    scope: Mapped[str] = mapped_column(String(16), default="workspace")
+    workspace_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    user_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
     created_at: Mapped[str] = mapped_column(String(19), default=now_str)
     updated_at: Mapped[str] = mapped_column(String(19), default=now_str, onupdate=now_str)
 
@@ -185,6 +195,8 @@ class Skill(Base):
             "source_run_id": self.source_run_id, "tags": jload(self.tags, []),
             "use_count": self.use_count, "success_count": self.success_count,
             "enabled": bool(self.enabled), "builtin": bool(self.builtin),
+            "scope": self.scope, "workspace_id": self.workspace_id,
+            "user_id": self.user_id,
             "created_at": self.created_at, "updated_at": self.updated_at,
         }
 
@@ -306,3 +318,88 @@ class SystemSetting(Base):
 
     def to_dict(self) -> dict:
         return {"key": self.key, "value": self.value, "updated_at": self.updated_at}
+
+
+# ---- 认证与 RBAC（Control Plane）----
+
+class User(Base):
+    """平台用户：只负责认证（Login），角色由 WorkspaceMember 决定。"""
+    __tablename__ = "users"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    username: Mapped[str] = mapped_column(String(64), unique=True)
+    email: Mapped[str | None] = mapped_column(String(255), nullable=True, unique=True)
+    # pbkdf2_sha256$iterations$salt_hex$hash_hex（auth/security.py）
+    password_hash: Mapped[str] = mapped_column(String(255))
+    display_name: Mapped[str] = mapped_column(String(64), default="")
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+    created_at: Mapped[str] = mapped_column(String(19), default=now_str)
+
+    def to_dict(self) -> dict:
+        return {"id": self.id, "username": self.username, "email": self.email,
+                "display_name": self.display_name or self.username,
+                "is_active": bool(self.is_active), "created_at": self.created_at}
+
+
+class Workspace(Base):
+    __tablename__ = "workspaces"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    name: Mapped[str] = mapped_column(String(128), unique=True)
+    description: Mapped[str] = mapped_column(Text, default="")
+    created_at: Mapped[str] = mapped_column(String(19), default=now_str)
+
+    def to_dict(self) -> dict:
+        return {"id": self.id, "name": self.name, "description": self.description,
+                "created_at": self.created_at}
+
+
+class WorkspaceMember(Base):
+    """用户 × 工作区 × 角色：同一用户在不同工作区可以有不同的角色。"""
+    __tablename__ = "workspace_members"
+    __table_args__ = (Index("idx_wm_user_ws", "user_id", "workspace_id", unique=True),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    workspace_id: Mapped[int] = mapped_column(Integer, nullable=False)
+    user_id: Mapped[int] = mapped_column(Integer, nullable=False)
+    role_code: Mapped[str] = mapped_column(String(32), nullable=False)  # → roles.code
+    created_at: Mapped[str] = mapped_column(String(19), default=now_str)
+
+    def to_dict(self) -> dict:
+        return {"id": self.id, "workspace_id": self.workspace_id, "user_id": self.user_id,
+                "role_code": self.role_code, "created_at": self.created_at}
+
+
+class Role(Base):
+    """角色定义（admin / analyst / viewer），权限集合见 role_permissions。"""
+    __tablename__ = "roles"
+
+    code: Mapped[str] = mapped_column(String(32), primary_key=True)
+    name: Mapped[str] = mapped_column(String(64))
+    description: Mapped[str] = mapped_column(Text, default="")
+
+    def to_dict(self) -> dict:
+        return {"code": self.code, "name": self.name, "description": self.description}
+
+
+class Permission(Base):
+    __tablename__ = "permissions"
+
+    code: Mapped[str] = mapped_column(String(64), primary_key=True)
+    name: Mapped[str] = mapped_column(String(128))
+    description: Mapped[str] = mapped_column(Text, default="")
+
+    def to_dict(self) -> dict:
+        return {"code": self.code, "name": self.name, "description": self.description}
+
+
+class RolePermission(Base):
+    __tablename__ = "role_permissions"
+    __table_args__ = (Index("idx_rp_role", "role_code", "permission_code", unique=True),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    role_code: Mapped[str] = mapped_column(String(32), nullable=False)
+    permission_code: Mapped[str] = mapped_column(String(64), nullable=False)
+
+    def to_dict(self) -> dict:
+        return {"role_code": self.role_code, "permission_code": self.permission_code}

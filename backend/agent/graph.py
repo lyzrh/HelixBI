@@ -157,6 +157,9 @@ class AgentState(TypedDict):
     followups: list[str]
     run_id: int | None
     session_id: int | None
+    # RBAC 最小钩子（与 skill_block 同模式）：可信后端解析的 UserContext。
+    # LLM 不可决定或修改权限；execute 节点执行前做工具级权限校验（纵深防御）。
+    user_context: dict
 
 
 def _history_block(history: list[dict[str, str]] | None) -> str:
@@ -268,6 +271,13 @@ def generate_code(state: AgentState) -> dict:
 
 
 def execute(state: AgentState) -> dict:
+    # 工具级权限校验（纵深防御）：即使有人绕过 API 层直接驱动图谱，
+    # 无 analysis:execute 权限的 UserContext 也不能触达沙箱执行。
+    user_context = state.get("user_context") or {}
+    if user_context:
+        from backend.auth.context import permission_checker
+
+        permission_checker.require(user_context, "analysis:execute")
     run_id = state.get("question", "run")[:8].replace(" ", "_") or "run"
     run_id = f"{run_id}-{uuid.uuid4().hex[:6]}"
     files = state["files"]
@@ -378,6 +388,7 @@ def _initial_state(
     skill_block: str = "",
     run_id: int | None = None,
     session_id: int | None = None,
+    user_context: dict | None = None,
 ) -> AgentState:
     return {
         "question": question,
@@ -395,6 +406,7 @@ def _initial_state(
         "followups": [],
         "run_id": run_id,
         "session_id": session_id,
+        "user_context": user_context or {},
     }
 
 
@@ -407,10 +419,12 @@ def run_analysis(
     skill_block: str = "",
     run_id: int | None = None,
     session_id: int | None = None,
+    user_context: dict | None = None,
 ) -> AgentState:
     app = build_graph()
     initial = _initial_state(question, files, history, spec, semantic_block, skill_block,
-                             run_id=run_id, session_id=session_id)
+                             run_id=run_id, session_id=session_id,
+                             user_context=user_context)
     return app.invoke(initial)
 
 
@@ -423,12 +437,14 @@ def stream_analysis(
     skill_block: str = "",
     run_id: int | None = None,
     session_id: int | None = None,
+    user_context: dict | None = None,
 ):
     """Run the graph yielding (node, delta, merged_state) after every node,
     so the UI can render DB-GPT-style live steps while the agent works."""
     app = build_graph()
     initial = _initial_state(question, files, history, spec, semantic_block, skill_block,
-                             run_id=run_id, session_id=session_id)
+                             run_id=run_id, session_id=session_id,
+                             user_context=user_context)
     merged: dict = dict(initial)
     for update in app.stream(initial, stream_mode="updates"):
         for node, delta in update.items():

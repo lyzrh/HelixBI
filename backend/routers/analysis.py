@@ -7,12 +7,14 @@ from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
 
+from backend.auth.context import UserContext
+from backend.auth.deps import get_current_context, require_permission
 from backend.db import get_db
 from backend.models import Message, Run, Session as DbSession, jdump, jload
 from backend.schemas import AnalyzeBody, ParseBody
 from backend.analysis import runtime as analysis_runner
 
-router = APIRouter(prefix="")
+router = APIRouter(prefix="", dependencies=[Depends(get_current_context)])
 
 # 并发护栏：Docker 沙箱资源有限（2 CPU / 2G / 容器）
 _semaphore = asyncio.Semaphore(2)
@@ -29,10 +31,13 @@ def _sse_frame(event: str, data: dict) -> str:
 
 
 @router.post("/sessions/{sid}/analyze")
-async def analyze(sid: int, body: AnalyzeBody, db: Session = Depends(get_db)):
+async def analyze(sid: int, body: AnalyzeBody, db: Session = Depends(get_db),
+                  ctx: UserContext = Depends(require_permission("analysis:execute"))):
     session = db.get(DbSession, sid)
     if not session:
         raise HTTPException(404, "会话不存在")
+    if session.workspace_id not in (ctx.workspace_id, None):
+        raise HTTPException(403, "会话不属于当前工作区")
     if not body.data_source_ids:
         raise HTTPException(400, "请至少选择一个数据源")
 
@@ -42,7 +47,9 @@ async def analyze(sid: int, body: AnalyzeBody, db: Session = Depends(get_db)):
 
     # 请求作用域内：匹配已启用 Skill（few-shot 注入）+ 落 user message + running run
     from backend.skills import engine as skill_engine
-    skills = skill_engine.match_skills(db, body.question)
+    skills = skill_engine.match_skills(db, body.question,
+                                       workspace_id=ctx.workspace_id,
+                                       user_id=ctx.user_id)
     skill_block = skill_engine.render_skill_prompt(skills)
 
     user_msg = Message(session_id=sid, role="user", content=body.question)
@@ -95,7 +102,8 @@ async def analyze(sid: int, body: AnalyzeBody, db: Session = Depends(get_db)):
 
 
 @router.post("/sessions/{sid}/parse")
-def parse(sid: int, body: ParseBody, db: Session = Depends(get_db)):
+def parse(sid: int, body: ParseBody, db: Session = Depends(get_db),
+          ctx: UserContext = Depends(require_permission("analysis:execute"))):
     """仅跑意图解析（parse_intent），返回 QuerySpec 供前端确认。"""
     from backend.agent.graph import parse_intent
     from backend.semantic import pack_for_file, render_semantic_prompt
@@ -197,6 +205,7 @@ async def rerun(rid: int, db: Session = Depends(get_db)):
                 lambda: analysis_runner.run_analysis_stream(
                     run_pk, run.session_id, run.question, data_source_ids,
                     spec, "", None, on_event,
+                    user_context=ctx.to_dict(),
                 ),
             )
         finally:
