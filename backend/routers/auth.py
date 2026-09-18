@@ -10,7 +10,7 @@ from sqlalchemy.orm import Session
 
 from backend.auth.context import resolve_user_context
 from backend.auth.deps import get_current_context, require_permission
-from backend.auth.security import create_token, hash_password, verify_password
+from backend.auth.security import create_token, decode_token, hash_password, verify_password
 from backend.db import get_db
 from backend.models import (
     Permission, Role, User, Workspace, WorkspaceMember, jdump,

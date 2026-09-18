@@ -117,6 +117,8 @@ class DataSource(Base):
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     name: Mapped[str] = mapped_column(String(255), unique=True)
     type: Mapped[str] = mapped_column(String(8))  # file | db
+    # 数据源归属工作区（Workspace → DataSource）；NULL 视为全局共享（历史数据）
+    workspace_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
     # file 源
     file_path: Mapped[str | None] = mapped_column(Text, nullable=True)
     # 沙箱挂载用真实存储文件名（含扩展名），让生成代码能选对读取函数

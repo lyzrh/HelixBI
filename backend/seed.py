@@ -195,7 +195,7 @@ def _seed_rbac(db: Session) -> None:
     for code, name, desc in ROLES:
         if not db.get(Role, code):
             db.add(Role(code=code, name=name, description=desc))
-    for code, name, _desc in PERMISSIONS:
+    for code, name in PERMISSIONS:
         if not db.get(Permission, code):
             db.add(Permission(code=code, name=name))
     db.flush()

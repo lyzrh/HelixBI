@@ -21,8 +21,16 @@ router = APIRouter(prefix="/skills",
 
 
 @router.get("")
-def list_skills(db: Session = Depends(get_db)):
-    return [s.to_dict() for s in db.query(Skill).order_by(Skill.id).all()]
+def list_skills(db: Session = Depends(get_db),
+                ctx: UserContext = Depends(get_current_context)):
+    # 作用域：global + 本工作区 + 本人（历史无归属数据视为全局）
+    rows = (db.query(Skill)
+            .filter((Skill.scope == "global")
+                    | (Skill.workspace_id == ctx.workspace_id)
+                    | (Skill.workspace_id.is_(None))
+                    | ((Skill.scope == "user") & (Skill.user_id == ctx.user_id)))
+            .order_by(Skill.id).all())
+    return [s.to_dict() for s in rows]
 
 
 @router.post("")
