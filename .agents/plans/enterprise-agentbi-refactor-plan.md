@@ -189,3 +189,29 @@ FastAPI (backend/, :8000)
 6. DB 密码明文存 app.db：本地单用户工具可接受，注释注明生产化建议
 7. pandas 3.0.5：洞察引擎避免 `append/applymap` 等已移除 API
 8. graph.py 改动仅 4 处 skill_block 钩子，空字符串路径与现状等价，旧 Streamlit 零影响
+
+## 十、后续演进
+
+### 2026-09-18：认证 + 工作区 + RBAC（增量，非重构）
+
+在原「前后端分离 + 领域重组」基座之上叠加身份与授权层，**不改动 Agent 内核与原有链路**：
+
+- **新增领域目录** `backend/auth/`：`security.py`（pbkdf2 口令哈希 + stdlib HS256 JWT）、
+  `context.py`（`resolve_user_context` + `permission_checker` 唯一权限入口）、
+  `deps.py`（`get_current_context` / `require_permission`）。
+- **新增路由** `backend/routers/auth.py`：登录 / UserContext / 切换工作区 / 角色权限查询 / 用户与成员管理。
+- **Agent 集成**：`AgentState` 增加 `user_context` 钩子（与既有 `skill_block` 同模式），
+  沙箱执行前权限检查；`analysis/runtime.py` 入口再检查一次并做数据源工作区过滤。
+- **隔离**：数据源 / Skill / 会话引入 `workspace_id`；Skill 增加 `global / workspace / user` 作用域。
+
+对本文档前述内容的修正：
+
+- **§四 元数据库 Schema 是重构时的基线**。此后新增 6 张表（`users` / `workspaces` /
+  `workspace_members` / `roles` / `permissions` / `role_permissions`），并为
+  `data_sources`、`skills`、`sessions` 增加归属列；权威列表以 `backend/models.py`
+  与 `backend/db.py::_migrate` 为准。
+- **§九 第 5、6 条中"单用户"的前提已不成立**：并发仍走 WAL + StaticPool + 独立 Session，
+  但权限、数据归属与隔离已按多用户设计；数据库密码明文存储仍是待办（见技术债清单）。
+- SSE 事件协议（§五）未变，仅在事件流的准入阶段前置了认证与权限检查。
+
+约定与清单详见 [.agents/rules/auth-rbac.md](../rules/auth-rbac.md) 与 [docs/api.md](../../docs/api.md)。

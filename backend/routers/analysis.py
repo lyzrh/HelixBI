@@ -164,7 +164,8 @@ def export_run(rid: int, db: Session = Depends(get_db)):
 
 
 @router.post("/runs/{rid}/rerun")
-async def rerun(rid: int, db: Session = Depends(get_db)):
+async def rerun(rid: int, db: Session = Depends(get_db),
+                ctx: UserContext = Depends(require_permission("analysis:execute"))):
     """用存量 spec + 原问题重跑（SSE）。"""
     run = db.get(Run, rid)
     if not run:
@@ -172,6 +173,8 @@ async def rerun(rid: int, db: Session = Depends(get_db)):
     session = db.get(DbSession, run.session_id)
     if not session:
         raise HTTPException(404, "原会话不存在")
+    if session.workspace_id not in (ctx.workspace_id, None):
+        raise HTTPException(403, "会话不属于当前工作区")
 
     if _semaphore.locked():
         raise HTTPException(429, "已有分析任务在执行中，请稍候再试")

@@ -206,6 +206,40 @@ def test_anonymous_api_access_denied(api):
     assert api.get("/api/health").status_code == 200  # 健康检查保持公开
 
 
+def test_case5_rerun_requires_analysis_execute(api, sales_ws, db_session):
+    """重跑端点也必须过权限门（回归：曾漏挂 analysis:execute）。"""
+    from backend.models import Run, Session as DbSession
+
+    session = DbSession(title="重跑用例", workspace_id=sales_ws["sales"].id)
+    db_session.add(session)
+    db_session.flush()
+    run = Run(session_id=session.id, question="按品类统计", data_source_ids="[]",
+              status="done", ok=True)
+    db_session.add(run)
+    db_session.commit()
+
+    viewer_token = _login(api, f"bob-{sales_ws['suffix']}", "bob-pass-123")
+    resp = api.post(f"/api/runs/{run.id}/rerun",
+                    headers=_headers(viewer_token, sales_ws["sales"].id))
+    assert resp.status_code == 403
+
+    # 跨工作区重跑：即使有 analysis:execute 也不能碰别的工作区的运行记录
+    analyst_token = _login(api, f"alice-{sales_ws['suffix']}", "alice-pass-123")
+    other_ws = sales_ws["mkt"].id
+    member = api.get("/api/auth/me", headers=_headers(analyst_token, other_ws))
+    assert member.status_code == 200  # alice 在 mkt 里是 viewer
+    # 给 alice 在 marketing 提升为 analyst，验证工作区维度的隔离（而非角色维度）
+    from backend.models import WorkspaceMember
+
+    m = (db_session.query(WorkspaceMember)
+         .filter(WorkspaceMember.workspace_id == other_ws,
+                 WorkspaceMember.user_id == sales_ws["alice"].id).first())
+    m.role_code = "analyst"
+    db_session.commit()
+    resp = api.post(f"/api/runs/{run.id}/rerun", headers=_headers(analyst_token, other_ws))
+    assert resp.status_code == 403  # 运行记录属 Sales 工作区
+
+
 # ---- Case 6：不同 Workspace 的 Skill / Memory 不串数据 ----
 
 def test_case6_skill_and_memory_isolation(api, sales_ws, db_session):
