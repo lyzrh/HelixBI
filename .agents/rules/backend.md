@@ -2,8 +2,9 @@
 
 ## 分层与文件
 
-- `backend/routers/`：**API 层**，一个业务域一个文件（analysis/sessions/datasources/agents/skills/insights/dashboards/explore/settings/usage/misc）。router 只做参数校验、调用领域模块、组装响应，**不写业务逻辑、不直接操作 ORM 细节**。
+- `backend/routers/`：**API 层**，一个业务域一个文件（auth/analysis/sessions/datasources/agents/skills/insights/dashboards/explore/settings/usage/misc）。router 只做参数校验、权限门、调用领域模块、组装响应，**不写业务逻辑、不直接操作 ORM 细节**。
 - **领域模块**（按能力划分，不按技术划分）：
+  - `backend/auth/`：认证与 RBAC（`security.py` 口令哈希 + JWT、`context.py` UserContext 解析 + `permission_checker`、`deps.py` `get_current_context` / `require_permission`）。
   - `backend/agent/`：Agent 内核与沙箱客户端（`graph.py` / `prompts.py` / `profiler.py` / `sandbox.py`）。
   - `backend/analysis/`：`runtime.py` 对话式分析运行器（SSE 流式 + 落库）；`explore.py` 自助分析（本地 pandas / 只读 SQL，零 token）。
   - `backend/skills/`：`engine.py` Skill 捕获 / 匹配 / 重放 / few-shot。
@@ -14,6 +15,15 @@
 - 基础设施：`backend/config.py`（全局配置单一入口：路径 / LLM / 沙箱 / 数据接入）、`backend/db.py`（SQLite WAL）、`models.py` / `schemas.py`、`seed.py`。
 - 配置数据：`semantic_packs/*.yaml`（业务语义唯一来源）；LLM 连接信息支持 `.env` 与设置中心热更新（改端点保存即生效，无需重启）。
 
+## 认证与权限（详见 [auth-rbac.md](auth-rbac.md)）
+
+- **UserContext 是唯一权限依据**：`backend/auth/context.py::resolve_user_context` 从 `User → WorkspaceMember → Role → Permission` 解析；Login 只认证，token 内不含权限。
+- **判断一律走 `permission_checker.has_permission(ctx, "xxx:yyy")`**；禁止 `if user.role == "admin"` 这类硬编码角色判断（角色是权限的容器，新增能力先加权限点再授权）。
+- **新增 router 必须挂登录门**（`dependencies=[Depends(get_current_context)]`），写 / 执行类端点挂 `require_permission("...")`；只有 `/api/health`、`/api/semantic/packs`、`/api/stats` 属公开白名单。
+- **401 / 403 由 auth 依赖统一抛出**，业务代码不手写状态码；工作区来自 `X-Workspace-Id` 请求头，缺省用用户第一个工作区。
+- **口令与密钥**：口令用 `hash_password` / `verify_password`（pbkdf2-sha256，stdlib）；JWT 用 `create_token` / `decode_token`（HS256，密钥取 `HELIX_JWT_SECRET`）。**不引入 JWT / 密码学第三方库**，如需刷新令牌等能力再评估替换。
+- **写入资产带 `workspace_id`**（数据源 / Skill / 会话），列表与详情按工作区过滤；跨工作区访问返回 403。
+
 ## 惯例
 
 - Python 3.11+，异步接口用 `async def`；SSE 用 StreamingResponse 输出 `spec/code/step/answer/chart/table` 等事件。
@@ -21,7 +31,7 @@
 - LLM 调用统一走 OpenAI 兼容接口（DeepSeek / 智谱 / 通义 / vLLM 均可），不要引入厂商私有 SDK。
 - Token 纪律：Skill 重放不经过 LLM；连接测试只发 `max_tokens=1` 探测；洞察诊断等批量任务注意控制上下文长度。
 - 新增依赖先确认必要性，写入 `requirements.txt`；不要引入重量级框架替换现有 LangGraph 链路。
-- 新增 / 移动领域目录时，同一次提交里同步更新 `AGENTS.md` 架构地图与 `.agents/rules/architecture.md`。
+- 新增 / 移动领域目录、改动认证与权限行为时，同一次提交里同步更新 `AGENTS.md` 架构地图、`.agents/rules/` 与 `docs/api.md`。
 
 ## 启动与验证
 
@@ -30,6 +40,10 @@ python -m uvicorn backend.main:app --port 8000
 pytest -q
 ```
 
-改完后端后至少验证：服务能启动、种子数据可加载（首次运行 seed）、相关 router 的冒烟请求通过、`pytest -q` 全绿。
+改完后端后至少验证：服务能启动、种子数据可加载（首次运行 seed）、**登录可用**
+（`curl -X POST localhost:8000/api/auth/login -d '{"username":"admin","password":"admin123"}' -H "Content-Type: application/json"`）、
+匿名访问业务接口返回 401、相关 router 的冒烟请求通过、`pytest -q` 全绿。
+
+改动认证 / 权限 / 工作区隔离时，额外跑 `pytest tests/test_auth_rbac.py -q` 并补对应 Case。
 
 改了语义解析 / Skill 匹配 / 沙箱链路等影响指标的行为时，额外跑 `python -m backend.evaluation` 看 Evaluation Report（见 `.agents/rules/architecture.md` 的指标门禁条目）。

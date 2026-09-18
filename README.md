@@ -10,7 +10,7 @@ Ask in natural language → the Agent generates analysis code → safe execution
 sandbox → charts / tables / conclusions. Analysis assets are automatically captured as
 Skills, Insights, and Dashboards — **the system gets smarter with every use**.
 
-[Getting Started](#getting-started) · [Core Features](#core-features) · [Architecture](#architecture) · [Evaluation](#evaluation) · [Tech Stack](#tech-stack) · [Roadmap](#roadmap)
+[Getting Started](#getting-started) · [Core Features](#core-features) · [Auth & RBAC](#auth--rbac) · [Architecture](#architecture) · [API](#api-overview) · [Evaluation](#evaluation) · [Tech Stack](#tech-stack) · [Roadmap](#roadmap)
 
 [简体中文](README.zh-CN.md) · **English**
 
@@ -24,7 +24,9 @@ Helix BI (绎数) is an open-source, enterprise-grade data-analysis agent workbe
 conversational analysis and traditional BI asset accumulation on the same pipeline:
 
 ```
-Connect data (files / databases) → Ask in chat (optional metric confirmation)
+Sign in → pick a workspace (role / permissions / data scope follow)
+  → Connect data (files / databases, owned by the workspace)
+  → Ask in chat (optional metric confirmation)
   → SSE streaming analysis (Skill hit: instant replay / miss: LLM codegen + self-repair)
   → Conclusions + charts + tables + follow-ups
   → Captured as Skills / pinned to dashboards
@@ -53,18 +55,50 @@ can always connect your own data.
 
 | Module | Capabilities |
 | --- | --- |
+| **Auth & RBAC** | Username / email + password sign-in (JWT); UserContext resolved from user → workspace membership → role → permissions, so the *same person can be an analyst in one workspace and a viewer in another*; 11 permission points across datasources / SQL / analysis / dashboards / skills / membership; authorization always enforced server-side — bypassing the UI still gets rejected |
 | **Conversational Analysis** | Ask in natural language; SSE streams step progress / code / terminal / charts / tables / conclusions; "confirm query first" mode lets you edit the QuerySpec before execution; automatic failure repair with retries (up to 3); one-click suggested follow-ups |
 | **Self-Service Analytics** | Click / drag fields for instant charts (ECharts interactive rendering, fully local — zero tokens); switch freely among bar / line / pie / area / scatter / stacked charts; adjustable aggregation and sorting |
 | **Scenario Agents** | Pre-built industry experts for retail sales and manufacturing production: bound semantic packs and datasources, opening messages, suggested questions, start/stop management — ready to chat out of the box |
-| **Skill Library** | Verified analysis paths are automatically captured as reusable Skills; similar questions replay stored code instantly (sub-second); when column schemas change, skills serve as few-shot references for regeneration; usage / success-rate statistics |
+| **Skill Library** | Verified analysis paths are automatically captured as reusable Skills; similar questions replay stored code instantly (sub-second); when column schemas change, skills serve as few-shot references for regeneration; `global / workspace / user` scopes prevent cross-workspace leakage; usage / success-rate statistics |
 | **Active Insights** | Scheduled scans across all datasources: metric jumps / sustained trends / outliers / top-share shifts / threshold breaches (partial months auto-excluded to avoid false alarms); new alerts get automatic LLM diagnosis (phenomenon → evidence → cause → recommendation); overview stat cards + status workflow |
 | **Dashboards** | Pin charts / tables / conclusions from conversations and insight diagnoses in one click; grid-layout browsing; export to self-contained HTML reports |
-| **Datasources** | CSV / Excel / Parquet upload; MySQL / PostgreSQL / SQLite connections (test before saving); DB tables materialized to parquet cache before entering the sandbox; data preview + **read-only SQL query** (executed on local sqlite — zero tokens) |
+| **Datasources** | CSV / Excel / Parquet upload; MySQL / PostgreSQL / SQLite connections (test before saving); **datasources belong to a workspace** — invisible to and unusable by other workspaces; DB tables materialized to parquet cache before entering the sandbox; data preview + **read-only SQL query** (executed on local sqlite — zero tokens) |
 | **Semantic Layer** | Industry semantic packs define metrics (with derived formulas: yield, attainment rate, average order value, etc.), dimensions, synonyms, time conventions, and chart suggestions — injected into generation prompts to keep definitions consistent |
 | **Settings Center** | Hot-reload LLM endpoints (DeepSeek / Zhipu / Qwen / any OpenAI-compatible API — takes effect on save, no restart); preferences (answer style / creativity / follow-up toggle / custom instructions); **UI language toggle (中文 / English)** — applies instantly to navigation / workbench / settings, persisted locally; profile |
-| **Reliability** | Network-isolated sandbox + CPU / memory limits + read-only data; `dahelper` JSON contract for returning results; SQLite metadata store in WAL mode |
+| **Reliability** | Network-isolated sandbox + CPU / memory limits + read-only data; `dahelper` JSON contract for returning results; SQLite metadata store in WAL mode; authorization enforced three times: API layer, runtime entry, before tool execution |
 | **Evaluation** | 65 fixed questions (retail / manufacturing / colloquial adversarial cases) + staged metric reports (semantic resolution / context injection / skill matching / replay admission); metric thresholds wired into pytest as CI gates |
-| **Observability** | Every analysis run persists a `Run.trace`: per-stage latencies, LLM calls & tokens, skill hit mode, six result-acceptance checks; the frontend "run timeline" panel exposes it — skill replay's `LLM calls == 0` is data, not copy |
+| **Observability** | Every analysis run persists a `Run.trace`: per-stage latencies, LLM calls & tokens, skill hit mode, six result-acceptance checks, and **the acting user / workspace / role**; the frontend "run timeline" panel exposes it — skill replay's `LLM calls == 0` is data, not copy |
+
+## Auth & RBAC
+
+Login only *authenticates*. What you can see and do is decided entirely server-side from trusted data:
+
+```
+Login (username / email + password)
+  ↓ authenticate: issue a JWT (identity only — no roles or permissions inside)
+user_id
+  ↓ User Resolver
+current workspace (X-Workspace-Id header, defaults to the user's first workspace)
+  ↓ Role / Permission / Data Scope
+UserContext { user_id, username, workspace_id, role, permissions, data_scope }
+  ↓
+LangGraph Agent → LLM → permission check → Tools (sandbox execution) → DataSource → result
+```
+
+- **Roles are never self-selected**: they come from `user → workspace membership → role → permissions`, so the same person can be an analyst in the sales workspace and only a viewer in the marketing one.
+- **Permission points**: `datasource:read/write`, `sql:execute`, `analysis:create/execute`, `dashboard:read/write`, `skill:read/write`, `workspace:manage`, `member:manage`.
+- **One single check entry**: everything goes through `permission_checker.has_permission(user_context, "datasource:write")` — no hard-coded role checks, and the LLM never participates in authorization.
+- **The UI is not a security boundary**: hiding buttons is a UX nicety; a viewer calling the API directly still gets 403.
+- **Data isolation**: datasources / skills / conversations all carry a workspace owner and cross-workspace access is rejected; skills additionally have `global / workspace / user` scopes.
+- **Default account**: built-in administrator `admin / admin123` (**change it and create real accounts right after the first deployment**).
+
+Built-in roles and their permission sets:
+
+| Role | Permissions |
+| --- | --- |
+| `admin` | all 11 |
+| `analyst` | datasource read/write, SQL execution, analysis create/execute, dashboard read/write, skill read/write |
+| `viewer` | datasource read, dashboard read, skill read |
 
 ## Why HelixBI?
 
@@ -129,6 +163,7 @@ Every run (including skill replays) persists a `Run.trace`:
 - **Per-stage latencies**: intent → semantic resolution → skill matching → codegen → sandbox execution → summary
 - **LLM usage**: call count (by node), input / output tokens, cost — always 0 for skill replays
 - **Result acceptance**: execution ok / has artifacts / answer present / chart files really exist / well-formed tables / clean stderr — six checks decoupled from the boolean `ok`
+- **Actor**: the user / workspace / role behind the run, for per-person and per-workspace auditing
 - **Failures leave traces too**: failed runs write the same trace — that's the round you most want to inspect
 
 The "run timeline" panel on historical chat messages exposes all of the above.
@@ -148,9 +183,12 @@ logic lives in the domain modules.
                   SSE streaming (spec/code/step/answer/chart…)
 ┌───────────────────────────▼──────────────────────────────────┐
 │                    FastAPI backend (:8000)                    │
-│  routers/    API layer: analysis(SSE) sessions datasources    │
-│              agents skills insights dashboards explore(SQL)   │
-│              settings usage misc                              │
+│  routers/    API layer: auth analysis(SSE) sessions           │
+│              datasources agents skills insights dashboards    │
+│              explore(SQL) settings usage misc                 │
+│              (carries the sign-in and permission gates)       │
+│  auth/       authentication & RBAC: UserContext resolution +  │
+│              the single permission-check entry                │
 │  agent/      Agent core: graph (LangGraph) + sandbox client   │
 │  analysis/   Analysis Runtime (driving + persistence) +       │
 │              self-service analytics (zero tokens)             │
@@ -159,8 +197,9 @@ logic lives in the domain modules.
 │  datasource/ files + DB connections + parquet cache           │
 │  semantic/   semantic-pack runtime (reads semantic_packs/)    │
 │  report/     self-contained HTML export                       │
-│  SQLite metadata (WAL): sessions/messages/runs/datasources/  │
-│    agents/skills/insights/dashboards/settings/token usage    │
+│  SQLite metadata (WAL): users/workspaces/members/roles/       │
+│    permissions, sessions/messages/runs/datasources/agents/    │
+│    skills/insights/dashboards/settings/token usage            │
 └───────────────────────────┬──────────────────────────────────┘
                             ▼
         LangGraph core (parse_intent → generate_code
@@ -215,6 +254,11 @@ changes take effect on save, no restart needed:
 OPENAI_BASE_URL=https://api.deepseek.com
 OPENAI_API_KEY=sk-xxx
 MODEL_NAME=deepseek-chat
+
+# Token signing secret (when unset, a random one is generated per process —
+# fine for single-process local dev only; multi-process / production
+# deployments MUST set it, otherwise every restart invalidates logins)
+HELIX_JWT_SECRET=replace-with-a-long-random-string
 ```
 
 ### 2. Sandbox image
@@ -236,8 +280,9 @@ docker build -t helix-sandbox:latest sandbox/
 python -m uvicorn backend.main:app --port 8000
 ```
 
-Open <http://127.0.0.1:8000> and you're ready to go (sample datasources / scenario
-agents / skills are preloaded).
+Open <http://127.0.0.1:8000> and sign in with the built-in administrator
+`admin / admin123` (**change the password and create real accounts immediately**); the
+sample datasources / scenario agents / skills are preloaded.
 
 The built-in sample data is generated demo data: retail sales covering ~6 months and
 manufacturing ~3 months, both ending recently — "last 30 / 90 days" questions work
@@ -256,15 +301,17 @@ For production, just run `npm run build`; the output is served statically by the
 ```
 backend/                # FastAPI service (organised by business domain)
   main.py               # entry point (CORS / static hosting / lifespan)
-  config.py             # single config entry (paths / LLM / sandbox / data)
-  db.py                 # SQLite engine (WAL)
-  models.py schemas.py  # ORM (metadata tables) and API models
-  seed.py               # built-in datasources / agents / skills / dashboards
-  routers/              # API layer: analysis sessions datasources agents skills
+  config.py             # single config entry (paths / LLM / sandbox / data / runtime dirs)
+  db.py                 # SQLite engine (WAL) + startup migrations (new columns / RBAC tables)
+  models.py schemas.py  # ORM (metadata tables + users/workspaces/roles/permissions) and API models
+  seed.py               # RBAC baseline + built-in datasources / agents / skills / dashboards
+  routers/              # API layer: auth analysis sessions datasources agents skills
                         #   insights dashboards explore settings usage misc
+  auth/                 # authentication & RBAC: security (password + JWT), context
+                        #   (UserContext + permission_checker), deps (sign-in / permission gates)
   agent/                # Agent core: graph prompts profiler sandbox
   analysis/             # Analysis Runtime (runtime) + self-service (explore)
-  skills/               # Skill capture / match / replay
+  skills/               # Skill capture / match / replay (with scope isolation)
   insights/             # rule scans (engine) + scheduler
   datasource/           # file / DB access + parquet materialization
   semantic/             # semantic-pack runtime (registry + render + resolver)
@@ -274,17 +321,47 @@ semantic_packs/         # industry semantic packs (retail_sales / manufacturing_
 sandbox/                # standalone execution environment: sandbox image
                         #   (pandas/pyarrow/matplotlib/CJK fonts + dahelper contract)
 frontend/               # React + AntD + Zustand + Vite
-  src/pages/            # Chat Workbench Explore Agents Skills Insights
+  src/pages/            # Login Chat Workbench Explore Agents Skills Insights
                         # Dashboards Datasources Usage
-  src/stores/           # chatStore (SSE state machine) appStore
-tests/                  # pytest suite (incl. evaluation/ metric gates)
+  src/stores/           # chatStore (SSE state machine) authStore (auth state) appStore
+  src/api/              # client (token injection / 401 redirect) sse (stream reading)
+tests/                  # pytest suite (evaluation/ metric gates + test_auth_rbac.py permission cases)
+docs/                   # api.md (endpoint reference) + README images
 examples/               # sample data (retail / manufacturing CSV, generated demo data)
 screenshots/            # README screenshots
 AGENTS.md               # universal AI-assistant rules (AGENTS standard)
 .agents/                # agent collaboration docs: rules/ (on-demand) + plans/ (design decisions)
 .claude/                # Claude Code config: settings + slash commands + subagents
-uploads/ data/ runs/    # runtime directories (gitignored)
+uploads/ data/ runs/    # runtime directories (gitignored, created automatically on startup)
 ```
+
+## API Overview
+
+The full endpoint reference — including the permission each route requires, status-code
+conventions and the SSE event protocol — lives in **[docs/api.md](docs/api.md)**; a live
+interactive version is available at `/docs` once the server is running.
+
+```bash
+# Sign in (username or email + password)
+curl -X POST http://127.0.0.1:8000/api/auth/login \
+  -H "Content-Type: application/json" \
+  -d '{"username":"admin","password":"admin123"}'
+# → { "token": "eyJ...", "user": {...}, "workspaces": [...] }
+
+# Call business endpoints with the token (X-Workspace-Id selects the workspace,
+# defaults to the user's first one)
+curl http://127.0.0.1:8000/api/datasources \
+  -H "Authorization: Bearer $TOKEN" -H "X-Workspace-Id: 1"
+```
+
+| Group | Endpoints | Permission |
+| --- | --- | --- |
+| Auth / workspaces | `/api/auth/login` (public) `/me` `/switch-workspace` `/roles` `/permissions` `/users` `/workspaces/{id}/members` | signed in; user & membership management needs `workspace:manage` / `member:manage` |
+| Chat & analysis | `/api/sessions...`, `/api/sessions/{id}/analyze`, `/api/runs/{id}/rerun`, `/api/runs/{id}/export` | `analysis:create` / `analysis:execute` (analysis endpoints are **SSE**) |
+| Datasources & self-service | `/api/datasources...`, `/api/explore/schema` `/profile` `/query` `/sql` | `datasource:read` / `datasource:write` / `sql:execute` / `analysis:execute` |
+| Skills / dashboards / insights | `/api/skills...`, `/api/dashboards...`, `/api/insights...` | `skill:read/write`, `dashboard:read/write`; insights require sign-in |
+| Agents / settings / usage / utils | `/api/agents...`, `/api/settings...`, `/api/usage...`, `/api/utils/export_table` | signed in |
+| Public | `/api/health`, `/api/semantic/packs`, `/api/stats` | none |
 
 ## Tech Stack
 
@@ -292,6 +369,7 @@ uploads/ data/ runs/    # runtime directories (gitignored)
 | --- | --- |
 | Frontend | React 18 · Ant Design 5 · Zustand · ECharts · Vite |
 | Backend | FastAPI · SQLAlchemy · SSE |
+| Auth & authorization | JWT (HS256, stdlib implementation) · pbkdf2-sha256 password hashing · built-in RBAC (roles / permissions / workspaces) |
 | Agent core | LangGraph · LangChain (OpenAI-compatible endpoints) |
 | Execution | Docker sandbox (no network, resource limits, read-only data) · pandas / pyarrow / matplotlib |
 | Metadata | SQLite (WAL mode) |
@@ -300,6 +378,7 @@ uploads/ data/ runs/    # runtime directories (gitignored)
 ## Design Philosophy
 
 - **Definitions first**: industry semantic packs + QuerySpec confirmation — align on "what to compute" before writing code, preventing LLM improvisation from drifting metric definitions
+- **Authorization first**: authentication only answers "who are you"; authorization comes from the server-resolved UserContext, checked through one entry and enforced at three points (API → runtime → tool) — button visibility in the UI is cosmetic
 - **Sandbox as safety net**: generated code always runs in a network-isolated Docker container with read-only data; results return through the `dahelper` JSON contract
 - **Asset accumulation**: a successful analysis becomes a Skill (instant replay); a valuable finding gets pinned to a dashboard — the system grows stronger with use instead of starting from scratch every time
 - **Proactive, not passive**: scheduled insight scans surface anomalies before the user even asks
@@ -312,8 +391,9 @@ execution, self-repair, and follow-up recommendation.
 
 ## Roadmap
 
-- **R2**: dashboards rendered client-side (interactive ECharts instead of PNG), insight subscription push, multi-user support & permissions, i18n for the remaining pages (the zh/en toggle already covers navigation / workbench / settings)
+- **R2**: dashboards rendered client-side (interactive ECharts instead of PNG), insight subscription push, i18n for the remaining pages (the zh/en toggle already covers navigation / workbench / settings; the sign-in page and workspace selector are still Chinese-only); ~~multi-user support & permissions~~ (✅ shipped: sign-in / workspaces / UserContext / RBAC — see "Auth & RBAC")
 - **R3**: ~~regression evaluation~~ (✅ shipped: `backend/evaluation/` + `tests/evaluation/` gates; next: grow the question set and collect sandbox-execution / self-repair metrics), visual semantic-pack editor, metric lineage
+- **Security hardening (P1)**: authenticate the static artifact mounts (`/runs`, `/uploads`, `/data` are currently open), encrypt stored database passwords, refresh tokens & a revocation list, finer-grained permissions for agent / settings endpoints
 - **Architecture (P2)**: `backend/routers/` → `api/` and `config/db/models/schemas` → `core/`; introduce `features/` domains in the frontend (see [.agents/rules/architecture.md](.agents/rules/architecture.md))
 
 ## License
