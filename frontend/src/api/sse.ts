@@ -1,6 +1,7 @@
 /** SSE 流消费：fetch POST + ReadableStream 手写解析（EventSource 不支持 POST） */
 
 import type { SseEvent } from './types';
+import { authHeaders } from './client';
 
 export async function sseStream(
   url: string,
@@ -10,10 +11,14 @@ export async function sseStream(
 ): Promise<void> {
   const resp = await fetch(url, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json; charset=utf-8' },
+    headers: { ...authHeaders(), 'Content-Type': 'application/json; charset=utf-8' },
     body: JSON.stringify(body),
     signal,
   });
+  if (resp.status === 401) {
+    onEvent({ event: 'error', data: { message: '登录已过期，请重新登录' } });
+    return;
+  }
   if (!resp.ok || !resp.body) {
     let detail = `请求失败 (${resp.status})`;
     try {

@@ -1,14 +1,15 @@
-import { Avatar, Layout, Menu, Tag, Tooltip } from 'antd';
+import { Avatar, Dropdown, Layout, Menu, Select, Space, Tag, Tooltip } from 'antd';
 import {
   DashboardOutlined, DatabaseOutlined, ExperimentOutlined,
-  MessageOutlined, RocketOutlined, SettingOutlined, SoundOutlined,
-  ThunderboltOutlined, PieChartOutlined,
+  LogoutOutlined, MessageOutlined, RocketOutlined, SettingOutlined, SoundOutlined,
+  ThunderboltOutlined, PieChartOutlined, SwapOutlined,
 } from '@ant-design/icons';
 import { useEffect, useState } from 'react';
 import { Outlet, useLocation, useNavigate } from 'react-router-dom';
 import { SettingsModal } from '../components/SettingsModal';
 import { HelixBadge } from '../components/HelixMark';
 import { useAppStore } from '../stores/appStore';
+import { useAuthStore } from '../stores/authStore';
 import { useT, type StrKey } from '../i18n';
 
 const NAV = [
@@ -29,9 +30,46 @@ export function AppLayout() {
   const health = useAppStore((s) => s.health);
   const profile = useAppStore((s) => s.profile);
   const loadProfile = useAppStore((s) => s.loadProfile);
+  const context = useAuthStore((s) => s.context);
+  const workspaces = useAuthStore((s) => s.workspaces);
+  const switchWorkspace = useAuthStore((s) => s.switchWorkspace);
+  const logout = useAuthStore((s) => s.logout);
   const [settingsOpen, setSettingsOpen] = useState(false);
 
   useEffect(() => { loadProfile(); }, [loadProfile]);
+
+  const onSwitchWorkspace = async (wsId: number) => {
+    if (!context || wsId === context.workspace_id) return;
+    // 切换工作区 → 重新获取 UserContext（角色/权限随新工作区变化）→ 刷新整站
+    await switchWorkspace(wsId);
+    window.location.href = '/';
+  };
+
+  const userMenu = {
+    items: [
+      { key: 'who', type: 'group' as const,
+        label: `${context?.username ?? profile.nickname} · ${context?.role ?? ''}` },
+      { type: 'divider' as const },
+      { key: 'switch', icon: <SwapOutlined />, label: '切换工作区',
+        children: workspaces.map((w) => ({
+          key: `ws-${w.workspace_id}`,
+          label: `${w.name}（${w.role_code}）`,
+        })) },
+      { key: 'settings', icon: <SettingOutlined />, label: '系统设置' },
+      { type: 'divider' as const },
+      { key: 'logout', icon: <LogoutOutlined />, label: '退出登录' },
+    ],
+    onClick: ({ key }: { key: string }) => {
+      if (key === 'logout') {
+        logout();
+        navigate('/login', { replace: true });
+      } else if (key === 'settings') {
+        setSettingsOpen(true);
+      } else if (key.startsWith('ws-')) {
+        onSwitchWorkspace(Number(key.slice(3)));
+      }
+    },
+  };
 
   const navKey = location.pathname.startsWith('/chat') ? '/chat' : location.pathname;
   const selected = NAV.find((n) => n.key === navKey);
@@ -92,6 +130,27 @@ export function AppLayout() {
           position: 'sticky', top: 0, zIndex: 100,
         }}>
           <span style={{ fontSize: 15, fontWeight: 600 }}>{pageTitle}</span>
+          {/* 当前工作区（切换后重新获取 UserContext，权限控制仍由后端完成） */}
+          {context && (
+            <Select
+              size="small"
+              value={context.workspace_id}
+              onChange={(v) => onSwitchWorkspace(v)}
+              style={{ width: 170, marginLeft: 12 }}
+              options={workspaces.map((w) => ({
+                value: w.workspace_id,
+                label: (
+                  <Space size={6}>
+                    <DatabaseOutlined style={{ color: '#5645D4' }} />
+                    <span>{w.name}</span>
+                    <Tag color="purple" style={{ marginLeft: 'auto', marginRight: 0 }}>
+                      {w.role_code}
+                    </Tag>
+                  </Space>
+                ),
+              }))}
+            />
+          )}
           <div style={{ flex: 1 }} />
           <Tooltip title={t('status.tipSettings')}>
             <SettingOutlined
@@ -99,17 +158,20 @@ export function AppLayout() {
               onClick={() => setSettingsOpen(true)}
             />
           </Tooltip>
-          <Tooltip title={`${profile.nickname} · ${profile.role}`}>
-            <div
-              style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer', padding: '0 2px' }}
-              onClick={() => setSettingsOpen(true)}
-            >
-              <Avatar size={32} style={{ background: profile.avatar_color, fontWeight: 600, fontSize: 14 }}>
-                {(profile.nickname || 'U').slice(0, 1)}
-              </Avatar>
-              <span style={{ fontSize: 13, color: '#334155' }}>{profile.nickname}</span>
-            </div>
-          </Tooltip>
+          <Dropdown menu={userMenu} trigger={['click']}>
+            <Tooltip title={`${profile.nickname} · ${profile.role}`}>
+              <div
+                style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer', padding: '0 2px' }}
+              >
+                <Avatar size={32} style={{ background: profile.avatar_color, fontWeight: 600, fontSize: 14 }}>
+                  {(context?.username || profile.nickname || 'U').slice(0, 1).toUpperCase()}
+                </Avatar>
+                <span style={{ fontSize: 13, color: '#334155' }}>
+                  {context?.username || profile.nickname}
+                </span>
+              </div>
+            </Tooltip>
+          </Dropdown>
         </Layout.Header>
         <Layout.Content style={{ minHeight: 'calc(100vh - 52px)' }}>
           <Outlet />
