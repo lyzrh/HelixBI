@@ -78,11 +78,15 @@ def list_xxx(db: Session = Depends(get_db), ctx: UserContext = Depends(get_curre
 
 | 资产 | 规则 |
 | --- | --- |
-| 数据源 | `data_sources.workspace_id` 归属工作区；列表与沙箱入口双重过滤 |
+| 数据源 | `data_sources.workspace_id` 归属工作区；列表/单查/物化/改删全链路过滤，越权 404 |
 | Skill | `scope` = `global` / `workspace` / `user`；匹配与列表按 `global ∪ 本工作区 ∪ 本人` 过滤 |
-| 会话（Memory 载体） | `sessions.workspace_id`；跨工作区访问返回 403 |
+| 会话（Memory 载体） | `sessions.workspace_id`；跨工作区访问 403；改名/删除需 `analysis:create` + 本工作区 |
+| 运行记录 Run | 随所属 session 工作区隔离；读取/导出/重跑/token 用量明细一律校验，越权 404 |
 | 仪表板 | `dashboards.workspace_id`；列表按「本工作区 ∪ 历史 NULL」过滤，跨工作区按 id 直取统一 404 |
+| 洞察 Insight | 经 `data_source_id` 间接归属工作区；读需 `datasource:read`、生成/诊断需 `analysis:execute`、状态流转需 `datasource:write`、调度修改需 `workspace:manage` |
+| 文件（Run 产物/上传文件/物化 parquet） | 不再使用 StaticFiles 匿名挂载；`backend/routers/files.py` 鉴权下发，按资源归属工作区校验，路径遍历防护，`/data` 只暴露已登记的物化文件 |
 | 成员与工作区管理 | `workspace:manage` / `member:manage`，只有 admin 拥有；成员管理只能作用于自己所在工作区；末位管理员不可降级 / 移除 |
+| 系统配置（LLM / 场景 Agent / 洞察调度） | 写操作一律 `workspace:manage`（admin）；读保持登录门（前端展示需要） |
 
 ## 密码与密钥
 
@@ -101,7 +105,6 @@ def list_xxx(db: Session = Depends(get_db), ctx: UserContext = Depends(get_curre
 
 ## 已知缺口（技术债，勿当成"已安全"）
 
-- `/runs`、`/uploads`、`/data` 三个静态挂载未鉴权，知道 URL 即可访问产物；后续需改为带鉴权的文件下发。
-- `settings` / `agents` / `insights` 等 router 目前只挂登录门，未细分权限点。
 - `data_sources.password` 仍是明文字段（沿袭改造前状态），需加密存储或改由外部密钥托管。
-- 无刷新令牌 / 注销黑名单，token 过期即需重新登录。
+- 无刷新令牌 / 注销黑名单，token 过期即需重新登录；后端重启（密钥进程内随机）会使全部 token 失效，旧标签页的失效请求会清除共享登录态（生产部署必须显式配置 `HELIX_JWT_SECRET`）。
+- 场景 Agent（scene_agents）为全局资产，无 workspace 归属；读写已按「读登录门 / 写 workspace:manage」收口，若需按工作区隔离需加列。

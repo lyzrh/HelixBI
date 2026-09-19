@@ -88,11 +88,14 @@ LangGraph Agent → LLM → 权限检查 → Tools（沙箱执行）→ DataSour
 - **角色不可自选**：角色来自 `用户 → 工作区成员 → 角色 → 权限`，同一个人可以在销售工作区是分析师、在营销工作区只是查看者。
 - **自助注册**：登录页「注册」入口创建账号（用户名 / 邮箱 / 口令，pbkdf2 哈希存储）；注册只建立认证身份，**不授予任何工作区与角色**——即使请求体传入角色字段也会被忽略。注册用户由管理员在「成员管理」页加入工作区并分配角色后才能登录使用。
 - **成员管理**：admin 可在工作区成员页添加（按用户名）/ 改角色 / 移除成员；末位管理员不能被降级或移除（防止工作区锁死）；成员管理只能作用于自己所在的工作区。
+- **资源隔离全覆盖**：数据源 / 会话 / 运行记录 / 仪表板 / 洞察 / Skill 按工作区过滤，跨工作区读取统一 404、写操作 403；运行产物（图表）/ 上传文件 / 物化缓存不再匿名下载，改由带登录态与工作区校验的文件下发接口提供。
+- **权限点全接线**：系统级配置（LLM、场景 Agent、洞察调度）写操作一律 `workspace:manage`；洞察按「读 datasource:read / 生成与诊断 analysis:execute / 流转 datasource:write」细分。
 - **权限点**：`datasource:read/write`、`sql:execute`、`analysis:create/execute`、`dashboard:read/write`、`skill:read/write`、`workspace:manage`、`member:manage`。
 - **判断单一入口**：后端一律走 `permission_checker.has_permission(user_context, "datasource:write")`，不硬编码角色；LLM 不参与授权决定。
 - **绕过前端无效**：前端隐藏按钮只是体验优化，Viewer 直接调 API 一律 403。
 - **数据隔离**：数据源 / Skill / 会话 / 仪表板都带工作区归属，跨工作区访问被拒；Skill 另有 global / workspace / user 三级作用域；历史全局仪表板（`workspace_id=NULL`）对所有工作区可见以保持兼容。
 - **默认账号**：内置管理员 `admin / admin123`（**首次部署后请立即改密并新建账号**）。
+- **本地联调**：`python -m backend.devseed` 一键创建 `analyst1` / `viewer1` 测试账号（口令 `Dev-12345678`；幂等、仅手动执行时创建，`HELIX_ENV=production` 下拒绝运行）。
 
 内置角色与权限集合：
 

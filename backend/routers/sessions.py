@@ -70,10 +70,13 @@ def get_session(sid: int, db: Session = Depends(get_db),
 
 
 @router.patch("/{sid}")
-def patch_session(sid: int, body: SessionPatch, db: Session = Depends(get_db)):
+def patch_session(sid: int, body: SessionPatch, db: Session = Depends(get_db),
+                  ctx: UserContext = Depends(require_permission("analysis:create"))):
     s = db.get(DbSession, sid)
     if not s:
         raise HTTPException(404, "会话不存在")
+    if s.workspace_id not in (ctx.workspace_id, None):
+        raise HTTPException(403, "会话不属于当前工作区")
     if body.title is not None:
         s.title = body.title
     if body.agent_id is not None:
@@ -83,10 +86,13 @@ def patch_session(sid: int, body: SessionPatch, db: Session = Depends(get_db)):
 
 
 @router.delete("/{sid}")
-def delete_session(sid: int, db: Session = Depends(get_db)):
+def delete_session(sid: int, db: Session = Depends(get_db),
+                   ctx: UserContext = Depends(require_permission("analysis:create"))):
     s = db.get(DbSession, sid)
     if not s:
         raise HTTPException(404, "会话不存在")
+    if s.workspace_id not in (ctx.workspace_id, None):
+        raise HTTPException(403, "会话不属于当前工作区")
     db.query(Run).filter(Run.session_id == sid).delete()
     db.query(Message).filter(Message.session_id == sid).delete()
     db.delete(s)

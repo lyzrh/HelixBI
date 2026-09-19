@@ -69,7 +69,8 @@ def get_llm_settings():
 
 
 @router.put("/llm")
-def update_llm_settings(body: LlmSettingsBody):
+def update_llm_settings(body: LlmSettingsBody,
+                        _ctx=Depends(require_permission("workspace:manage"))):
     if not any([body.base_url, body.api_key, body.model]):
         return {"ok": True, "message": "没有需要保存的变更"}
     config.update_llm_config(body.base_url, body.api_key, body.model)
@@ -90,7 +91,8 @@ class LlmTestBody(BaseModel):
 
 
 @router.post("/llm/test")
-def test_llm(body: LlmTestBody):
+def test_llm(body: LlmTestBody,
+             _ctx=Depends(require_permission("workspace:manage"))):
     """测试连通性：用极小请求（max_tokens=1）验证，尽量省 token。
 
     传了字段则用传入值临时测试（不落盘）；否则用当前已保存配置。

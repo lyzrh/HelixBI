@@ -87,8 +87,8 @@ curl -X POST http://127.0.0.1:8000/api/auth/switch-workspace \
 | DELETE | `/api/sessions/{sid}` | 登录 | 删除会话及其消息与运行记录 |
 | POST | `/api/sessions/{sid}/analyze` | `analysis:execute` | **SSE** 流式分析（Skill 匹配 → 图谱执行 → 落库） |
 | POST | `/api/sessions/{sid}/parse` | `analysis:execute` | 仅跑意图解析，返回 QuerySpec 供人工确认 |
-| GET | `/api/runs/recent` | 登录 | 最近分析运行 |
-| GET | `/api/runs/{rid}` | 登录 | 运行详情（含 `trace` 可观测数据） |
+| GET | `/api/runs/recent` | 登录 | 最近分析运行（按工作区过滤） |
+| GET | `/api/runs/{rid}` | 登录 | 运行详情（含 `trace`；跨工作区 404） |
 | GET | `/api/runs/{rid}/export` | 登录 | 导出单轮分析 HTML 报告 |
 | POST | `/api/runs/{rid}/rerun` | `analysis:execute` | 用存量 spec 重跑（**SSE**，同样受工作区隔离约束） |
 
@@ -140,22 +140,23 @@ curl -X POST http://127.0.0.1:8000/api/auth/switch-workspace \
 | GET | `/api/dashboards`、`/{did}` | `dashboard:read` | 仪表板列表 / 详情 |
 | POST / PATCH / DELETE | `/api/dashboards...` | `dashboard:write` | 仪表板与条目增删改、排序 |
 | GET | `/api/dashboards/{did}/export` | `dashboard:read` | 导出自包含 HTML |
-| POST | `/api/insights/generate` | 登录 | 立即扫描并生成洞察 |
-| GET / POST / PATCH | `/api/insights...` | 登录 | 列表 / 诊断报告 / 状态流转 / 定时扫描配置 |
+| POST | `/api/insights/generate` | `analysis:execute` | 立即扫描并生成洞察（数据源须属当前工作区） |
+| GET | `/api/insights`、`/{iid}`、`/export`、`/schedule` | `datasource:read` | 列表 / 详情 / CSV 导出 / 调度配置查看（按工作区过滤） |
+| POST | `/api/insights/{iid}/report` | `analysis:execute` | LLM 诊断报告（本工作区洞察） |
+| PATCH | `/api/insights/{iid}` | `datasource:write` | 状态流转（本工作区洞察） |
+| PUT / POST | `/api/insights/schedule`、`/schedule/run` | `workspace:manage` | 修改调度 / 立即全量扫描（系统级，仅 admin） |
 
 ## 场景 Agent / 设置 / 用量 / 工具
 
-以下接口当前**只要求登录**（未细分权限点，见技术债）：
-
-| 方法 | 路径 | 说明 |
-| --- | --- | --- |
-| GET / POST / PATCH / DELETE | `/api/agents...` | 场景 Agent 管理 |
-| GET / PUT | `/api/settings/llm` | LLM 接口配置（含密钥掩码返回） |
-| POST | `/api/settings/llm/test` | LLM 连通性测试 |
-| GET / PUT | `/api/settings/profile` | 个人资料 |
-| GET / PUT | `/api/settings/preferences` | 回答风格 / 创意度 / 追问开关 / 自定义指令 |
-| GET | `/api/usage/summary`、`/history`、`/sessions/{sid}/tokens` | Token 用量统计 |
-| POST | `/api/utils/export_table` | 前端表格导出 Excel |
+| 方法 | 路径 | 权限 | 说明 |
+| --- | --- | --- | --- |
+| GET | `/api/agents`、`/{aid}` | 登录 | 场景 Agent 列表 / 详情（全员可用） |
+| POST / PATCH / DELETE | `/api/agents...` | `workspace:manage` | 场景 Agent 管理（仅 admin） |
+| GET | `/api/settings/llm` | 登录 | LLM 接口配置（含密钥掩码返回） |
+| PUT | `/api/settings/llm`、`/llm/test` | `workspace:manage` | 修改 LLM 配置 / 连通性测试（仅 admin） |
+| GET / PUT | `/api/settings/profile`、`/preferences` | 登录 | 个人资料 / 回答风格偏好 |
+| GET | `/api/usage/summary`、`/history`、`/sessions/{sid}/tokens` | 登录 | Token 用量统计（按运行的工作区隔离） |
+| POST | `/api/utils/export_table` | 登录 | 前端表格导出 Excel（仅导出请求方已持有的数据） |
 
 ## 公开端点
 
@@ -164,10 +165,10 @@ curl -X POST http://127.0.0.1:8000/api/auth/switch-workspace \
 | GET | `/api/health` | 健康检查（沙箱可用性 / LLM 配置状态 / 语义包列表） |
 | GET | `/api/semantic/packs` | 语义包列表 |
 | GET | `/api/stats` | 首页统计 |
-| GET | `/runs/...`、`/uploads/...`、`/data/...` | 静态产物（**当前未鉴权**，见技术债） |
+| GET | `/runs/{rid}/...`、`/uploads/{file}`、`/data/materialized/{file}` | 登录 + 工作区校验的鉴权文件下发（Run 产物 / 上传源文件 / 物化 parquet，见 `backend/routers/files.py`） |
 
 ## 技术债
 
-- 三个静态挂载未鉴权，持有 URL 即可访问分析产物与上传文件。
-- `settings` / `agents` / `insights` / `usage` / `utils` 只做登录校验，未细分权限点。
+- 静态挂载未鉴权问题已修复（`backend/routers/files.py` 鉴权下发，按工作区校验）。
+- `settings` / `agents` / `insights` / `usage` 的权限点已细分（写操作 `workspace:manage` / 对应资源权限；`utils/export_table` 仅导出前端已持有数据，保持登录门）。
 - 无刷新令牌与注销黑名单；`data_sources.password` 仍为明文字段。

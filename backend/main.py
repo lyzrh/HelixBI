@@ -7,11 +7,12 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.staticfiles import StaticFiles
+from fastapi.staticfiles import StaticFiles  # noqa: F401 — 仅生产模式 /assets 使用
 
-from backend.config import FRONTEND_DIST, MATERIALIZED_DIR, RUNS_DIR, UPLOADS_DIR
+from backend.config import FRONTEND_DIST
 from backend.db import init_db
 from backend.routers import api_router
+from backend.routers.files import router as files_router
 
 
 @asynccontextmanager
@@ -42,10 +43,10 @@ app.add_middleware(
 
 app.include_router(api_router)
 
-# 产物与数据静态目录（图表 PNG / 上传文件 / 物化 parquet）
-app.mount("/runs", StaticFiles(directory=str(RUNS_DIR)), name="runs")
-app.mount("/uploads", StaticFiles(directory=str(UPLOADS_DIR)), name="uploads")
-app.mount("/data", StaticFiles(directory=str(MATERIALIZED_DIR.parent)), name="data")
+# 文件下发已改为带鉴权的路由（backend/routers/files.py，根路径与前端既有 URL 一致）：
+# 旧版 StaticFiles 挂载 /runs /uploads /data 匿名可访问（连 SQLite 元数据库都可下载），
+# 现按 Run / DataSource 归属工作区校验后下发。
+app.include_router(files_router)
 
 # 生产模式：serve 前端构建产物（SPA fallback）
 if FRONTEND_DIST.exists():

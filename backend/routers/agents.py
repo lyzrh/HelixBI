@@ -21,7 +21,8 @@ def list_agents(db: Session = Depends(get_db)):
 
 
 @router.post("")
-def create_agent(body: AgentCreate, db: Session = Depends(get_db)):
+def create_agent(body: AgentCreate, db: Session = Depends(get_db),
+                 _ctx=Depends(require_permission("workspace:manage"))):
     valid = {p["id"] for p in list_packs()}
     if body.pack_id not in valid:
         raise HTTPException(400, f"语义包不存在，可选: {sorted(valid)}")
@@ -50,7 +51,8 @@ def get_agent(aid: int, db: Session = Depends(get_db)):
 
 
 @router.patch("/{aid}")
-def patch_agent(aid: int, body: AgentPatch, db: Session = Depends(get_db)):
+def patch_agent(aid: int, body: AgentPatch, db: Session = Depends(get_db),
+                _ctx=Depends(require_permission("workspace:manage"))):
     a = db.get(SceneAgent, aid)
     if not a:
         raise HTTPException(404, "场景 Agent 不存在")
@@ -80,7 +82,8 @@ def patch_agent(aid: int, body: AgentPatch, db: Session = Depends(get_db)):
 
 
 @router.delete("/{aid}")
-def delete_agent(aid: int, db: Session = Depends(get_db)):
+def delete_agent(aid: int, db: Session = Depends(get_db),
+                 _ctx=Depends(require_permission("workspace:manage"))):
     a = db.get(SceneAgent, aid)
     if not a:
         raise HTTPException(404, "场景 Agent 不存在")

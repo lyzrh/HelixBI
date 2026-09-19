@@ -2,10 +2,11 @@
 
 from datetime import date, datetime, timedelta
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import func, text
 from sqlalchemy.orm import Session
 
+from backend.auth.context import UserContext
 from backend.auth.deps import get_current_context, require_permission
 from backend.db import get_db
 from backend.models import TokenUsage
@@ -101,8 +102,18 @@ def usage_history(
 
 
 @router.get("/sessions/{sid}/tokens")
-def usage_by_session(sid: int, db: Session = Depends(get_db)):
-    """某次分析运行的 token 用量明细。"""
+def usage_by_session(sid: int, db: Session = Depends(get_db),
+                     ctx: UserContext = Depends(get_current_context)):
+    """某次分析运行的 token 用量明细（运行记录按工作区隔离）。"""
+    from backend.models import Run, Session as DbSession
+
+    run = db.get(Run, sid)
+    if not run:
+        raise HTTPException(404, "运行记录不存在")
+    session = db.get(DbSession, run.session_id) if run.session_id else None
+    ws = session.workspace_id if session else None
+    if ws not in (ctx.workspace_id, None):
+        raise HTTPException(404, "运行记录不存在")
     rows = db.query(TokenUsage).filter(TokenUsage.run_id == sid).order_by(TokenUsage.created_at).all()
     total_input = sum(r.input_tokens for r in rows)
     total_output = sum(r.output_tokens for r in rows)

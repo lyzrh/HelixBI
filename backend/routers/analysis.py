@@ -122,10 +122,29 @@ def parse(sid: int, body: ParseBody, db: Session = Depends(get_db),
         return {"spec": {"rewritten_question": body.question}, "error": str(exc)}
 
 
+def _run_workspace(db: Session, run: Run) -> int | None:
+    """Run 归属工作区：随其 session（历史匿名会话视为全局 NULL）。"""
+    session = db.get(DbSession, run.session_id) if run.session_id else None
+    return session.workspace_id if session else None
+
+
+def _get_visible_run(db: Session, rid: int, ctx: UserContext) -> Run:
+    run = db.get(Run, rid)
+    if not run:
+        raise HTTPException(404, "运行记录不存在")
+    if _run_workspace(db, run) not in (ctx.workspace_id, None):
+        raise HTTPException(404, "运行记录不存在")
+    return run
+
+
 @router.get("/runs/recent")
-def recent_runs(limit: int = 8, db: Session = Depends(get_db)):
-    """工作台「最近分析」列表（成功/失败都要，供快捷回访）。"""
-    runs = (db.query(Run).order_by(Run.id.desc()).limit(min(max(limit, 1), 20)).all())
+def recent_runs(limit: int = 8, db: Session = Depends(get_db),
+                ctx: UserContext = Depends(get_current_context)):
+    """工作台「最近分析」列表（成功/失败都要，供快捷回访），按工作区过滤。"""
+    runs = (db.query(Run).join(DbSession, Run.session_id == DbSession.id)
+            .filter((DbSession.workspace_id == ctx.workspace_id)
+                    | (DbSession.workspace_id.is_(None)))
+            .order_by(Run.id.desc()).limit(min(max(limit, 1), 20)).all())
     out = []
     for r in runs:
         out.append({
@@ -137,26 +156,22 @@ def recent_runs(limit: int = 8, db: Session = Depends(get_db)):
 
 
 @router.get("/runs/{rid}")
-def get_run(rid: int, db: Session = Depends(get_db)):
-    run = db.get(Run, rid)
-    if not run:
-        raise HTTPException(404, "运行记录不存在")
-    return run.to_dict()
+def get_run(rid: int, db: Session = Depends(get_db),
+            ctx: UserContext = Depends(get_current_context)):
+    return _get_visible_run(db, rid, ctx).to_dict()
 
 
 @router.get("/runs/{rid}/export")
-def export_run(rid: int, db: Session = Depends(get_db)):
+def export_run(rid: int, db: Session = Depends(get_db),
+               ctx: UserContext = Depends(get_current_context)):
     """单轮分析结果导出自包含 HTML。"""
     import urllib.parse
 
     from fastapi.responses import Response
 
-    from backend.models import Run
     from backend.report.exporter import build_run_html
 
-    run = db.get(Run, rid)
-    if not run:
-        raise HTTPException(404, "运行记录不存在")
+    run = _get_visible_run(db, rid, ctx)
     content = build_run_html(run)
     filename = urllib.parse.quote(f"分析报告-{run.id}.html")
     return Response(content=content, media_type="text/html",

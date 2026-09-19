@@ -6,6 +6,7 @@ import Markdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { api } from '../../api/client';
 import type { ChatMessage } from '../../api/types';
+import { AuthImg } from './AuthImg';
 
 export function AnswerCard({ text }: { text: string }) {
   return (
@@ -21,7 +22,7 @@ export function ChartGallery({ charts, onPin }: { charts: string[]; onPin?: (url
     <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(320px, 1fr))', gap: 12, margin: '10px 0' }}>
       {charts.map((url) => (
         <div key={url} style={{ position: 'relative' }}>
-          <img src={url} alt="图表" style={{ width: '100%', borderRadius: 8, border: '1px solid #e2e8f0', background: '#fff' }} />
+          <AuthImg src={url} alt="图表" style={{ width: '100%', borderRadius: 8, border: '1px solid #e2e8f0', background: '#fff' }} />
           {onPin && (
             <Tooltip title="固定到仪表板">
               <Button size="small" icon={<PushpinOutlined />} style={{ position: 'absolute', top: 8, right: 8 }}

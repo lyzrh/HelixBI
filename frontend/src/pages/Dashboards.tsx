@@ -18,6 +18,7 @@ import type {
   DashboardInfo, DashboardItemInfo, DataSourceInfo,
 } from '../api/types';
 import { ResultTable } from '../components/chat/ResultBlocks';
+import { AuthImg } from '../components/chat/AuthImg';
 import { EChart } from '../components/charts/EChart';
 import { useAppStore } from '../stores/appStore';
 
@@ -383,7 +384,7 @@ export function Dashboards() {
                           <EChart option={item.payload.chart_option as EChartsOption} height={320} />
                         )}
                         {item.type === 'chart' && !item.payload.chart_option && item.payload.chart_url && (
-                          <img src={item.payload.chart_url} alt={item.title}
+                          <AuthImg src={item.payload.chart_url} alt={item.title}
                             style={{ width: '100%', maxHeight: 380, objectFit: 'contain', borderRadius: 6 }} />
                         )}
                         {item.type === 'table' && item.payload.rows && (

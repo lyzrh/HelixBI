@@ -92,11 +92,14 @@ LangGraph Agent → LLM → permission check → Tools (sandbox execution) → D
 - **Roles are never self-selected**: they come from `user → workspace membership → role → permissions`, so the same person can be an analyst in the sales workspace and only a viewer in the marketing one.
 - **Self-registration**: the "Register" entry on the login page creates an account (username / email / password, stored as pbkdf2 hashes); registration only establishes an identity and **grants no workspace and no role** — role fields in the request body are ignored. An admin then adds the user to a workspace via the Members page.
 - **Membership management**: admins can add (by username) / re-role / remove members; the last admin of a workspace cannot be demoted or removed; member management only works on the admin's own workspace.
+- **Workspace isolation everywhere**: datasources / sessions / runs / dashboards / insights / skills are filtered by workspace — cross-workspace reads get 404 and writes get 403; run artifacts, uploaded files and materialized caches are served through an authenticated file-download route (workspace-checked) instead of anonymous static mounts.
+- **Permission points fully wired**: system-level writes (LLM settings, scenario agents, insight scheduling) require `workspace:manage`; insights distinguish read (`datasource:read`) / generate & diagnose (`analysis:execute`) / status change (`datasource:write`).
 - **Permission points**: `datasource:read/write`, `sql:execute`, `analysis:create/execute`, `dashboard:read/write`, `skill:read/write`, `workspace:manage`, `member:manage`.
 - **One single check entry**: everything goes through `permission_checker.has_permission(user_context, "datasource:write")` — no hard-coded role checks, and the LLM never participates in authorization.
 - **The UI is not a security boundary**: hiding buttons is a UX nicety; a viewer calling the API directly still gets 403.
 - **Data isolation**: datasources / skills / conversations / dashboards all carry a workspace owner and cross-workspace access is rejected; skills additionally have `global / workspace / user` scopes; legacy global dashboards (`workspace_id=NULL`) stay visible to all workspaces for compatibility.
 - **Default account**: built-in administrator `admin / admin123` (**change it and create real accounts right after the first deployment**).
+- **Local demo accounts**: run `python -m backend.devseed` to create `analyst1` / `viewer1` (password `Dev-12345678`; idempotent, manual-only, refused when `HELIX_ENV=production`).
 
 Built-in roles and their permission sets:
 

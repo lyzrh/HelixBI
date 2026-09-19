@@ -139,11 +139,20 @@ def list_data_sources(db: Session = Depends(get_db),
             .order_by(DataSource.id).all()]
 
 
-@router.get("/{dsid}")
-def get_data_source(dsid: int, db: Session = Depends(get_db)):
+def _get_visible_data_source(db: Session, dsid: int, ctx: UserContext) -> DataSource:
+    """按 id 取数据源并校验工作区归属（本工作区或历史全局），越权统一 404。"""
     ds = db.get(DataSource, dsid)
     if not ds:
         raise HTTPException(404, "数据源不存在")
+    if ds.workspace_id is not None and ds.workspace_id != ctx.workspace_id:
+        raise HTTPException(404, "数据源不存在")
+    return ds
+
+
+@router.get("/{dsid}")
+def get_data_source(dsid: int, db: Session = Depends(get_db),
+                    ctx: UserContext = Depends(get_current_context)):
+    ds = _get_visible_data_source(db, dsid, ctx)
     d = ds.to_dict()
     if ds.pack_id:
         d["pack_detail"] = load_pack(ds.pack_id)
@@ -151,10 +160,9 @@ def get_data_source(dsid: int, db: Session = Depends(get_db)):
 
 
 @router.get("/{dsid}/tables")
-def get_tables(dsid: int, db: Session = Depends(get_db)):
-    ds = db.get(DataSource, dsid)
-    if not ds:
-        raise HTTPException(404, "数据源不存在")
+def get_tables(dsid: int, db: Session = Depends(get_db),
+               ctx: UserContext = Depends(get_current_context)):
+    ds = _get_visible_data_source(db, dsid, ctx)
     if ds.type != "db":
         return [{"name": ds.name, "row_estimate": ds.row_count}]
     return list_tables(ds)
@@ -162,10 +170,9 @@ def get_tables(dsid: int, db: Session = Depends(get_db)):
 
 @router.get("/{dsid}/preview")
 def get_preview(dsid: int, table: str = "", limit: int = 50,
-                db: Session = Depends(get_db)):
-    ds = db.get(DataSource, dsid)
-    if not ds:
-        raise HTTPException(404, "数据源不存在")
+                db: Session = Depends(get_db),
+                ctx: UserContext = Depends(get_current_context)):
+    ds = _get_visible_data_source(db, dsid, ctx)
     try:
         return preview(ds, table or None, min(limit, 200))
     except Exception as exc:
@@ -175,10 +182,8 @@ def get_preview(dsid: int, table: str = "", limit: int = 50,
 @router.post("/{dsid}/materialize")
 def materialize_source(dsid: int, body: MaterializeBody,
                        db: Session = Depends(get_db),
-                       _ctx: UserContext = Depends(require_permission("datasource:write"))):
-    ds = db.get(DataSource, dsid)
-    if not ds:
-        raise HTTPException(404, "数据源不存在")
+                       ctx: UserContext = Depends(require_permission("datasource:write"))):
+    ds = _get_visible_data_source(db, dsid, ctx)
     try:
         result = materialize(ds, body.table, body.force)
         db.commit()
@@ -192,10 +197,8 @@ def materialize_source(dsid: int, body: MaterializeBody,
 @router.patch("/{dsid}")
 def patch_data_source(dsid: int, body: DataSourcePatch,
                       db: Session = Depends(get_db),
-                      _ctx: UserContext = Depends(require_permission("datasource:write"))):
-    ds = db.get(DataSource, dsid)
-    if not ds:
-        raise HTTPException(404, "数据源不存在")
+                      ctx: UserContext = Depends(require_permission("datasource:write"))):
+    ds = _get_visible_data_source(db, dsid, ctx)
     if body.name is not None:
         ds.name = body.name
     if body.pack_id is not None:
@@ -211,10 +214,8 @@ def patch_data_source(dsid: int, body: DataSourcePatch,
 
 @router.delete("/{dsid}")
 def delete_data_source(dsid: int, db: Session = Depends(get_db),
-                       _ctx: UserContext = Depends(require_permission("datasource:write"))):
-    ds = db.get(DataSource, dsid)
-    if not ds:
-        raise HTTPException(404, "数据源不存在")
+                       ctx: UserContext = Depends(require_permission("datasource:write"))):
+    ds = _get_visible_data_source(db, dsid, ctx)
     if ds.builtin:
         raise HTTPException(400, "内置示例数据源不可删除")
     db.delete(ds)
