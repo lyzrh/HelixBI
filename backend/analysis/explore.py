@@ -9,6 +9,7 @@ import math
 import re
 import sqlite3
 
+import numpy as np
 import pandas as pd
 
 from backend.models import DataSource
@@ -122,13 +123,16 @@ def profile_fields(ds: DataSource) -> dict:
                 desc = num.describe(percentiles=[0.25, 0.5, 0.75])
                 hist = None
                 if num.nunique() > 3:
-                    binned = pd.cut(num, bins=10, duplicates="drop")
-                    vc = binned.value_counts().sort_index()
-                    hist = {
-                        "bins": [f"{py(a):.4g}~{py(b):.4g}"
-                                 for a, b in zip(vc.index.left, vc.index.right)],
-                        "counts": [int(c) for c in vc.values],
-                    }
+                    # np.histogram 直方图；极端重复值导致箱边界不唯一时优雅降级
+                    try:
+                        counts, edges = np.histogram(num, bins=10)
+                        hist = {
+                            "bins": [f"{edges[i]:.4g}~{edges[i + 1]:.4g}"
+                                     for i in range(len(counts))],
+                            "counts": [int(c) for c in counts],
+                        }
+                    except (ValueError, TypeError):
+                        hist = None
                 item.update({
                     "min": py(desc["min"]), "max": py(desc["max"]),
                     "mean": py(round(float(desc["mean"]), 4)),

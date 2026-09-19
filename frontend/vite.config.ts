@@ -6,10 +6,10 @@ export default defineConfig({
   server: {
     port: 5173,
     proxy: {
-      '/api': { target: 'http://localhost:8999', changeOrigin: true },
-      '/runs': { target: 'http://localhost:8999', changeOrigin: true },
-      '/uploads': { target: 'http://localhost:8999', changeOrigin: true },
-      '/data': { target: 'http://localhost:8999', changeOrigin: true },
+      '/api': { target: 'http://localhost:8000', changeOrigin: true },
+      '/runs': { target: 'http://localhost:8000', changeOrigin: true },
+      '/uploads': { target: 'http://localhost:8000', changeOrigin: true },
+      '/data': { target: 'http://localhost:8000', changeOrigin: true },
     },
   },
 });

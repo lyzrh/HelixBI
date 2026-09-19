@@ -353,3 +353,19 @@ def test_case14_role_semantics_after_member_flow(api, env):
     kh = _headers(kate_token, env["ws_a"])
     assert api.post("/api/sessions", headers=kh, json={"title": "x"}).status_code == 403
     assert api.get("/api/datasources", headers=kh).status_code == 200
+
+
+def test_explore_profile_numeric_histogram(api, env):
+    """回归：数值列直方图构建（pd.cut CategoricalIndex 崩溃 → np.histogram）。"""
+    token = _token(api, "admin", "admin123")
+    h = _headers(token, env["ws_a"])
+    ds_rows = api.get("/api/datasources", headers=h).json()
+    if not ds_rows:
+        pytest.skip("无数据源")
+    resp = api.get(f"/api/explore/profile?data_source_id={ds_rows[0]['id']}", headers=h)
+    assert resp.status_code == 200, resp.text
+    fields = resp.json()["fields"]
+    numeric = [f for f in fields if f["dtype"] == "number" and f.get("hist")]
+    assert numeric, "数值列应产出直方图"
+    for f in numeric:
+        assert len(f["hist"]["bins"]) == len(f["hist"]["counts"])
