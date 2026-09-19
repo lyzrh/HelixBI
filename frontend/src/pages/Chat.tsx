@@ -75,6 +75,15 @@ export function Chat() {
     loadDataSources();
   }, [loadSessions, loadDataSources]);
 
+  // 工作台横幅提问直达：一次性读取预填问题
+  useEffect(() => {
+    const q = sessionStorage.getItem('helix_prefill_q');
+    if (q) {
+      sessionStorage.removeItem('helix_prefill_q');
+      setInput(q);
+    }
+  }, []);
+
   // 路由参数驱动会话切换
   useEffect(() => {
     const id = sessionId ? Number(sessionId) : null;

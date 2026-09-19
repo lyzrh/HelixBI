@@ -100,33 +100,34 @@ export function AppLayout() {
           onClick={({ key }) => navigate(key)}
           style={{ borderInlineEnd: 'none', padding: '0 8px', background: 'transparent' }} />
         <div style={{ position: 'absolute', bottom: 16, left: 16, right: 16 }}>
-          {/* 当前用户卡：企业级身份元素（头像 + 用户名 + 实时角色） */}
-          <div style={{
-            fontSize: 12, color: '#A4A097', display: 'flex', flexDirection: 'column', gap: 8,
-            background: 'rgba(255,255,255,0.05)', border: '1px solid rgba(255,255,255,0.08)',
-            borderRadius: 12, padding: '10px 12px', marginBottom: 10,
-          }}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 9 }}>
-              <Avatar size={28} style={{
-                background: 'linear-gradient(135deg,#5645D4,#7B5CF5)',
-                fontWeight: 600, fontSize: 13, flexShrink: 0,
-              }}>
-                {(context?.username || 'U').slice(0, 1).toUpperCase()}
-              </Avatar>
-              <div style={{ minWidth: 0, flex: 1 }}>
-                <div style={{ color: '#fff', fontSize: 12.5, fontWeight: 600,
-                              overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                  {context?.username || profile.nickname}
-                </div>
-                {context?.role && (
-                  <span className={`role-tag-${context.role}`} style={{
-                    fontSize: 10.5, fontWeight: 600, borderRadius: 5,
-                    padding: '0 6px', lineHeight: '16px', display: 'inline-block', marginTop: 2,
-                  }}>{context.role}</span>
-                )}
+          {/* 当前工作区：切换后重新获取 UserContext（权限控制仍由后端完成） */}
+          {context && (
+            <div style={{ marginBottom: 10 }}>
+              <div style={{ fontSize: 10.5, color: 'rgba(255,255,255,0.38)', padding: '0 2px 5px' }}>
+                当前工作区
               </div>
+              <Select
+                size="small"
+                value={context.workspace_id}
+                onChange={(v) => onSwitchWorkspace(v)}
+                style={{ width: '100%' }}
+                popupMatchSelectWidth={false}
+                options={workspaces.map((w) => ({
+                  value: w.workspace_id,
+                  label: (
+                    <Space size={6}>
+                      <DatabaseOutlined style={{ color: '#5645D4' }} />
+                      <span style={{ fontSize: 12 }}>{w.name}</span>
+                      <span className={`role-tag-${w.role_code}`} style={{
+                        fontSize: 10, fontWeight: 600, borderRadius: 5, marginLeft: 'auto',
+                        padding: '0 5px', lineHeight: '15px', border: '1px solid',
+                      }}>{w.role_code}</span>
+                    </Space>
+                  ),
+                }))}
+              />
             </div>
-          </div>
+          )}
           <div style={{
             fontSize: 12, color: '#A4A097', display: 'flex', flexDirection: 'column', gap: 6,
             background: 'rgba(255,255,255,0.04)', borderRadius: 12, padding: '10px 12px',
@@ -150,6 +151,33 @@ export function AppLayout() {
               </Tooltip>
             </span>
           </div>
+          {/* 当前用户卡：企业级身份元素（头像 + 用户名 + 实时角色） */}
+          <div style={{
+            display: 'flex', alignItems: 'center', gap: 9, marginTop: 10,
+            background: 'rgba(255,255,255,0.05)', border: '1px solid rgba(255,255,255,0.08)',
+            borderRadius: 12, padding: '8px 12px',
+          }}>
+            <Avatar size={28} style={{
+              background: 'linear-gradient(135deg,#5645D4,#7B5CF5)',
+              fontWeight: 600, fontSize: 13, flexShrink: 0,
+            }}>
+              {(context?.username || 'U').slice(0, 1).toUpperCase()}
+            </Avatar>
+            <div style={{ minWidth: 0, flex: 1 }}>
+              <div style={{ color: '#fff', fontSize: 12.5, fontWeight: 600,
+                            overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                {context?.username || profile.nickname}
+              </div>
+              {context?.role && (
+                <span className={`role-tag-${context.role}`} style={{
+                  fontSize: 10.5, fontWeight: 600, borderRadius: 5, border: '1px solid',
+                  padding: '0 6px', lineHeight: '15px', display: 'inline-block', marginTop: 2,
+                }}>{context.role}</span>
+              )}
+            </div>
+            <LogoutOutlined style={{ color: 'rgba(255,255,255,0.45)', fontSize: 13, cursor: 'pointer' }}
+              onClick={() => { logout(); navigate('/login', { replace: true }); }} />
+          </div>
         </div>
       </Layout.Sider>
       <Layout style={{ marginLeft: 208 }}>
@@ -161,28 +189,6 @@ export function AppLayout() {
           position: 'sticky', top: 0, zIndex: 100,
         }}>
           <span style={{ fontSize: 15, fontWeight: 600 }}>{pageTitle}</span>
-          {/* 当前工作区（切换后重新获取 UserContext，权限控制仍由后端完成） */}
-          {context && (
-            <Select
-              size="small"
-              value={context.workspace_id}
-              onChange={(v) => onSwitchWorkspace(v)}
-              style={{ width: 190, marginLeft: 12 }}
-              options={workspaces.map((w) => ({
-                value: w.workspace_id,
-                label: (
-                  <Space size={6}>
-                    <DatabaseOutlined style={{ color: '#5645D4' }} />
-                    <span>{w.name}</span>
-                    <span className={`role-tag-${w.role_code}`} style={{
-                      fontSize: 10.5, fontWeight: 600, borderRadius: 5,
-                      padding: '0 6px', lineHeight: '16px', border: '1px solid',
-                    }}>{w.role_code}</span>
-                  </Space>
-                ),
-              }))}
-            />
-          )}
           <div style={{ flex: 1 }} />
           <Tooltip title={t('status.tipSettings')}>
             <SettingOutlined
