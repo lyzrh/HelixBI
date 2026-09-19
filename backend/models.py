@@ -236,11 +236,14 @@ class Dashboard(Base):
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     name: Mapped[str] = mapped_column(String(200))
     description: Mapped[str] = mapped_column(Text, default="")
+    # 仪表板归属工作区；NULL 视为历史全局仪表板（所有工作区可见，保持兼容）
+    workspace_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
     created_at: Mapped[str] = mapped_column(String(19), default=now_str)
     updated_at: Mapped[str] = mapped_column(String(19), default=now_str, onupdate=now_str)
 
     def to_dict(self) -> dict:
         return {"id": self.id, "name": self.name, "description": self.description,
+                "workspace_id": self.workspace_id,
                 "created_at": self.created_at, "updated_at": self.updated_at}
 
 

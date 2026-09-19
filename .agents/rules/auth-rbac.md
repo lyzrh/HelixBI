@@ -63,7 +63,8 @@ def list_xxx(db: Session = Depends(get_db), ctx: UserContext = Depends(get_curre
 
 ### 公开端点（白名单）
 
-`GET /api/health`、`GET /api/semantic/packs`、`GET /api/stats`（`backend/routers/misc.py` 未挂认证依赖）。
+`GET /api/health`、`GET /api/semantic/packs`、`GET /api/stats`（`backend/routers/misc.py` 未挂认证依赖）、
+`POST /api/auth/register`（自助注册：只创建认证身份，不授予任何工作区与角色；请求体中的角色字段被忽略）。
 新增公开端点必须在评审中说明理由。
 
 ## Agent / Tool 集成
@@ -80,7 +81,8 @@ def list_xxx(db: Session = Depends(get_db), ctx: UserContext = Depends(get_curre
 | 数据源 | `data_sources.workspace_id` 归属工作区；列表与沙箱入口双重过滤 |
 | Skill | `scope` = `global` / `workspace` / `user`；匹配与列表按 `global ∪ 本工作区 ∪ 本人` 过滤 |
 | 会话（Memory 载体） | `sessions.workspace_id`；跨工作区访问返回 403 |
-| 成员与工作区管理 | `workspace:manage` / `member:manage`，只有 admin 拥有 |
+| 仪表板 | `dashboards.workspace_id`；列表按「本工作区 ∪ 历史 NULL」过滤，跨工作区按 id 直取统一 404 |
+| 成员与工作区管理 | `workspace:manage` / `member:manage`，只有 admin 拥有；成员管理只能作用于自己所在工作区；末位管理员不可降级 / 移除 |
 
 ## 密码与密钥
 

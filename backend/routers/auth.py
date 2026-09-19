@@ -4,6 +4,8 @@
 切换工作区 = 重新解析 UserContext（前端随后刷新上下文）。
 """
 
+import re
+
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
@@ -18,6 +20,9 @@ from backend.models import (
 
 router = APIRouter(prefix="/auth")
 
+_USERNAME_RE = re.compile(r"^[A-Za-z0-9_.\-]{2,64}$")
+_EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
+
 
 class LoginBody(BaseModel):
     username: str = Field(min_length=1)  # 支持用户名或邮箱
@@ -26,6 +31,18 @@ class LoginBody(BaseModel):
 
 class SwitchWorkspaceBody(BaseModel):
     workspace_id: int
+
+
+class RegisterBody(BaseModel):
+    """自助注册：只创建认证身份，不授予任何工作区与角色。
+
+    明确不提供 role / workspace 字段——即使客户端传入也会被忽略，
+    角色只能由工作区管理员通过成员管理接口分配。
+    """
+    username: str = Field(min_length=2, max_length=64)
+    password: str = Field(min_length=8, max_length=128)
+    email: str
+    display_name: str = ""
 
 
 class UserCreateBody(BaseModel):
@@ -42,6 +59,33 @@ class MemberAddBody(BaseModel):
 
 class MemberPatchBody(BaseModel):
     role_code: str = Field(pattern="^(admin|analyst|viewer)$")
+
+
+@router.post("/register")
+def register(body: RegisterBody, db: Session = Depends(get_db)):
+    """自助注册（公开端点）：仅创建 User，不创建任何 WorkspaceMember。
+
+    注册成功 ≠ 有权限：用户必须由 admin 加入工作区后（Membership + Role）
+    才能登录使用，登录链路对此已有 403 防线。
+    """
+    if not _USERNAME_RE.match(body.username):
+        raise HTTPException(400, "用户名只能包含字母、数字、点、下划线、连字符，长度 2-64")
+    if not _EMAIL_RE.match(body.email):
+        raise HTTPException(400, "邮箱格式不正确")
+    if db.query(User).filter(User.username == body.username).first():
+        raise HTTPException(400, "用户名已存在")
+    if db.query(User).filter(User.email == body.email).first():
+        raise HTTPException(400, "邮箱已被注册")
+    user = User(
+        username=body.username,
+        email=body.email,
+        display_name=body.display_name.strip()[:64] or body.username,
+        # 口令只存 pbkdf2_sha256 哈希，绝不存明文（auth/security.py）
+        password_hash=hash_password(body.password),
+    )
+    db.add(user)
+    db.commit()
+    return user.to_dict()
 
 
 @router.post("/login")
@@ -143,17 +187,20 @@ def create_user(body: UserCreateBody, db: Session = Depends(get_db),
 
 @router.get("/workspaces/{wsid}/members")
 def list_members(wsid: int, db: Session = Depends(get_db),
-                 ctx: object = Depends(require_permission("member:manage"))):
+                 ctx=Depends(require_permission("member:manage"))):
+    _ensure_same_workspace(ctx, wsid)
     rows = (db.query(WorkspaceMember, User)
             .join(User, WorkspaceMember.user_id == User.id)
             .filter(WorkspaceMember.workspace_id == wsid).all())
-    return [{**m.to_dict(), "username": u.username, "display_name": u.display_name}
+    return [{**m.to_dict(), "username": u.username, "display_name": u.display_name,
+             "email": u.email}
             for m, u in rows]
 
 
 @router.post("/workspaces/{wsid}/members")
 def add_member(wsid: int, body: MemberAddBody, db: Session = Depends(get_db),
-               _ctx: None = Depends(require_permission("member:manage"))):
+               ctx=Depends(require_permission("member:manage"))):
+    _ensure_same_workspace(ctx, wsid)
     ws = db.get(Workspace, wsid)
     if not ws:
         raise HTTPException(404, "工作区不存在")
@@ -161,7 +208,7 @@ def add_member(wsid: int, body: MemberAddBody, db: Session = Depends(get_db),
         raise HTTPException(400, "角色不存在")
     user = db.query(User).filter(User.username == body.username).first()
     if not user:
-        raise HTTPException(404, "用户不存在")
+        raise HTTPException(404, "用户不存在（请先让该用户完成注册）")
     exists = (db.query(WorkspaceMember)
               .filter(WorkspaceMember.workspace_id == wsid,
                       WorkspaceMember.user_id == user.id).first())
@@ -176,7 +223,8 @@ def add_member(wsid: int, body: MemberAddBody, db: Session = Depends(get_db),
 @router.patch("/workspaces/{wsid}/members/{uid}")
 def patch_member(wsid: int, uid: int, body: MemberPatchBody,
                  db: Session = Depends(get_db),
-                 _ctx: None = Depends(require_permission("member:manage"))):
+                 ctx=Depends(require_permission("member:manage"))):
+    _ensure_same_workspace(ctx, wsid)
     member = (db.query(WorkspaceMember)
               .filter(WorkspaceMember.workspace_id == wsid,
                       WorkspaceMember.user_id == uid).first())
@@ -184,12 +232,45 @@ def patch_member(wsid: int, uid: int, body: MemberPatchBody,
         raise HTTPException(404, "成员关系不存在")
     if not db.get(Role, body.role_code):
         raise HTTPException(400, "角色不存在")
+    # 末位管理员保护：降级最后一个 admin 会导致工作区失去管理能力（锁死）
+    if member.role_code == "admin" and body.role_code != "admin":
+        _ensure_not_last_admin(db, wsid, uid)
     member.role_code = body.role_code
     db.commit()
     return member.to_dict()
 
 
+@router.delete("/workspaces/{wsid}/members/{uid}")
+def remove_member(wsid: int, uid: int, db: Session = Depends(get_db),
+                  ctx=Depends(require_permission("member:manage"))):
+    """移除成员：移除后该用户立即失去本工作区的全部权限（角色随成员关系删除）。"""
+    _ensure_same_workspace(ctx, wsid)
+    member = (db.query(WorkspaceMember)
+              .filter(WorkspaceMember.workspace_id == wsid,
+                      WorkspaceMember.user_id == uid).first())
+    if not member:
+        raise HTTPException(404, "成员关系不存在")
+    if member.role_code == "admin":
+        _ensure_not_last_admin(db, wsid, uid)
+    db.delete(member)
+    db.commit()
+    return {"ok": True}
+
+
 # ---- 内部工具 ----
+
+def _ensure_same_workspace(ctx, wsid: int) -> None:
+    """成员管理只能作用于自己所在（且有权管理的）工作区，防止改 id 越权。"""
+    if ctx.workspace_id != wsid:
+        raise HTTPException(403, "不能管理其他工作区的成员")
+
+
+def _ensure_not_last_admin(db: Session, wsid: int, uid: int) -> None:
+    admins = (db.query(WorkspaceMember)
+              .filter(WorkspaceMember.workspace_id == wsid,
+                      WorkspaceMember.role_code == "admin").all())
+    if len(admins) <= 1 and any(m.user_id == uid for m in admins):
+        raise HTTPException(400, "不能移除或降级工作区最后一名管理员")
 
 def _memberships(db: Session, user_id: int) -> list[dict]:
     rows = (db.query(WorkspaceMember, Workspace)

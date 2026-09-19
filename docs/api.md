@@ -53,6 +53,7 @@ curl -X POST http://127.0.0.1:8000/api/auth/switch-workspace \
 | 方法 | 路径 | 所需权限 | 说明 |
 | --- | --- | --- | --- |
 | POST | `/api/auth/login` | 公开 | 用户名 / 邮箱 + 口令 → JWT + 工作区列表 |
+| POST | `/api/auth/register` | 公开 | 自助注册：仅创建认证身份（pbkdf2 哈希存储），不授予任何工作区与角色；角色字段即使传入也被忽略 |
 | GET | `/api/auth/me` | 登录 | 当前 UserContext（含角色与权限集合）+ 工作区列表 |
 | POST | `/api/auth/switch-workspace` | 登录 | 切换工作区并重新解析 UserContext |
 | GET | `/api/auth/permissions` | 登录 | 全部权限点定义 |
@@ -61,7 +62,8 @@ curl -X POST http://127.0.0.1:8000/api/auth/switch-workspace \
 | POST | `/api/auth/users` | `workspace:manage` | 新建用户（用户名 / 口令 / 显示名） |
 | GET | `/api/auth/workspaces/{wsid}/members` | `member:manage` | 工作区成员列表 |
 | POST | `/api/auth/workspaces/{wsid}/members` | `member:manage` | 添加成员并指定角色 |
-| PATCH | `/api/auth/workspaces/{wsid}/members/{uid}` | `member:manage` | 调整成员角色 |
+| PATCH | `/api/auth/workspaces/{wsid}/members/{uid}` | `member:manage` | 调整成员角色（末位管理员不可降级） |
+| DELETE | `/api/auth/workspaces/{wsid}/members/{uid}` | `member:manage` | 移除成员（立即失去本工作区权限；末位管理员不可移除；仅限本工作区） |
 
 `/api/auth/me` 返回的 `context` 结构：
 

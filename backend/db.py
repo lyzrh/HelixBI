@@ -81,3 +81,8 @@ def _migrate() -> None:
             if col not in sess_cols:
                 conn.exec_driver_sql(f"ALTER TABLE sessions ADD COLUMN {col} INTEGER")
                 conn.commit()
+        # 仪表板工作区归属（历史行保持 NULL = 全局可见）
+        dash_cols = {row[1] for row in conn.exec_driver_sql("PRAGMA table_info(dashboards)")}
+        if "workspace_id" not in dash_cols:
+            conn.exec_driver_sql("ALTER TABLE dashboards ADD COLUMN workspace_id INTEGER")
+            conn.commit()
