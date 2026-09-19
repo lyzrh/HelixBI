@@ -16,6 +16,8 @@ import { Dashboards } from './pages/Dashboards';
 import { Explore } from './pages/Explore';
 import { Usage } from './pages/Usage';
 import { Login } from './pages/Login';
+import { Register } from './pages/Register';
+import { Members } from './pages/Members';
 import { theme } from './theme';
 import { useAppStore } from './stores/appStore';
 import { useAuthStore } from './stores/authStore';
@@ -57,6 +59,7 @@ export default function App() {
       <AntdApp>
         <Routes>
           <Route path="/login" element={<Login />} />
+          <Route path="/register" element={<Register />} />
           {token ? (
             <Route element={<AppLayout />}>
               <Route path="/" element={<Workbench />} />
@@ -69,6 +72,7 @@ export default function App() {
               <Route path="/dashboards" element={<Dashboards />} />
               <Route path="/datasources" element={<Datasources />} />
               <Route path="/usage" element={<Usage />} />
+              <Route path="/members" element={<Members />} />
               <Route path="*" element={<Navigate to="/" replace />} />
             </Route>
           ) : (

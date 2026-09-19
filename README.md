@@ -39,13 +39,17 @@ can always connect your own data.
 
 ## Screenshots
 
-| Conversational Analysis (agent streaming) | Workbench |
+| Login (Premium SaaS split view) | Workbench (brand gradient hero) |
 |:---:|:---:|
-| ![Conversational Analysis](https://cdn.jsdelivr.net/gh/lyzrh/HelixBI@main/screenshots/chat.png) | ![Workbench](https://cdn.jsdelivr.net/gh/lyzrh/HelixBI@main/screenshots/workbench.png) |
+| ![Login](https://cdn.jsdelivr.net/gh/lyzrh/HelixBI@main/screenshots/login.png) | ![Workbench](https://cdn.jsdelivr.net/gh/lyzrh/HelixBI@main/screenshots/workbench.png) |
 
-| Self-Service Analytics (drag & drop, zero tokens) | Active Insights (scheduled scans + overview) |
+| Conversational Analysis (agent streaming) | Self-Service Analytics (drag & drop, zero tokens) |
 |:---:|:---:|
-| ![Self-Service Analytics](https://cdn.jsdelivr.net/gh/lyzrh/HelixBI@main/screenshots/explore.png) | ![Active Insights](https://cdn.jsdelivr.net/gh/lyzrh/HelixBI@main/screenshots/insights.png) |
+| ![Conversational Analysis](https://cdn.jsdelivr.net/gh/lyzrh/HelixBI@main/screenshots/chat.png) | ![Self-Service Analytics](https://cdn.jsdelivr.net/gh/lyzrh/HelixBI@main/screenshots/explore.png) |
+
+| Active Insights (scheduled scans + overview) | Workspace Members (RBAC) |
+|:---:|:---:|
+| ![Active Insights](https://cdn.jsdelivr.net/gh/lyzrh/HelixBI@main/screenshots/insights.png) | ![Members](https://cdn.jsdelivr.net/gh/lyzrh/HelixBI@main/screenshots/members.png) |
 
 | Datasource Management (upload / database / SQL query) |
 |:---:|
@@ -55,7 +59,7 @@ can always connect your own data.
 
 | Module | Capabilities |
 | --- | --- |
-| **Auth & RBAC** | Username / email + password sign-in (JWT); UserContext resolved from user → workspace membership → role → permissions, so the *same person can be an analyst in one workspace and a viewer in another*; 11 permission points across datasources / SQL / analysis / dashboards / skills / membership; authorization always enforced server-side — bypassing the UI still gets rejected |
+| **Auth & RBAC** | Username / email + password sign-in (JWT) + self-registration (grants no roles); UserContext resolved from user → workspace membership → role → permissions, so the *same person can be an analyst in one workspace and a viewer in another*; 11 permission points across datasources / SQL / analysis / dashboards / skills / membership; admins manage members visually (add / re-role / remove, last-admin protection); authorization always enforced server-side — bypassing the UI still gets rejected |
 | **Conversational Analysis** | Ask in natural language; SSE streams step progress / code / terminal / charts / tables / conclusions; "confirm query first" mode lets you edit the QuerySpec before execution; automatic failure repair with retries (up to 3); one-click suggested follow-ups |
 | **Self-Service Analytics** | Click / drag fields for instant charts (ECharts interactive rendering, fully local — zero tokens); switch freely among bar / line / pie / area / scatter / stacked charts; adjustable aggregation and sorting |
 | **Scenario Agents** | Pre-built industry experts for retail sales and manufacturing production: bound semantic packs and datasources, opening messages, suggested questions, start/stop management — ready to chat out of the box |
@@ -86,10 +90,12 @@ LangGraph Agent → LLM → permission check → Tools (sandbox execution) → D
 ```
 
 - **Roles are never self-selected**: they come from `user → workspace membership → role → permissions`, so the same person can be an analyst in the sales workspace and only a viewer in the marketing one.
+- **Self-registration**: the "Register" entry on the login page creates an account (username / email / password, stored as pbkdf2 hashes); registration only establishes an identity and **grants no workspace and no role** — role fields in the request body are ignored. An admin then adds the user to a workspace via the Members page.
+- **Membership management**: admins can add (by username) / re-role / remove members; the last admin of a workspace cannot be demoted or removed; member management only works on the admin's own workspace.
 - **Permission points**: `datasource:read/write`, `sql:execute`, `analysis:create/execute`, `dashboard:read/write`, `skill:read/write`, `workspace:manage`, `member:manage`.
 - **One single check entry**: everything goes through `permission_checker.has_permission(user_context, "datasource:write")` — no hard-coded role checks, and the LLM never participates in authorization.
 - **The UI is not a security boundary**: hiding buttons is a UX nicety; a viewer calling the API directly still gets 403.
-- **Data isolation**: datasources / skills / conversations all carry a workspace owner and cross-workspace access is rejected; skills additionally have `global / workspace / user` scopes.
+- **Data isolation**: datasources / skills / conversations / dashboards all carry a workspace owner and cross-workspace access is rejected; skills additionally have `global / workspace / user` scopes; legacy global dashboards (`workspace_id=NULL`) stay visible to all workspaces for compatibility.
 - **Default account**: built-in administrator `admin / admin123` (**change it and create real accounts right after the first deployment**).
 
 Built-in roles and their permission sets:
@@ -356,7 +362,7 @@ curl http://127.0.0.1:8000/api/datasources \
 
 | Group | Endpoints | Permission |
 | --- | --- | --- |
-| Auth / workspaces | `/api/auth/login` (public) `/me` `/switch-workspace` `/roles` `/permissions` `/users` `/workspaces/{id}/members` | signed in; user & membership management needs `workspace:manage` / `member:manage` |
+| Auth / workspaces | `/api/auth/register` (public, identity only — no grants) `/login` (public) `/me` `/switch-workspace` `/roles` `/permissions` `/users` `/workspaces/{id}/members` (GET/POST/PATCH/DELETE) | signed in; user & membership management needs `workspace:manage` / `member:manage` |
 | Chat & analysis | `/api/sessions...`, `/api/sessions/{id}/analyze`, `/api/runs/{id}/rerun`, `/api/runs/{id}/export` | `analysis:create` / `analysis:execute` (analysis endpoints are **SSE**) |
 | Datasources & self-service | `/api/datasources...`, `/api/explore/schema` `/profile` `/query` `/sql` | `datasource:read` / `datasource:write` / `sql:execute` / `analysis:execute` |
 | Skills / dashboards / insights | `/api/skills...`, `/api/dashboards...`, `/api/insights...` | `skill:read/write`, `dashboard:read/write`; insights require sign-in |

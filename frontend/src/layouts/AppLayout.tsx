@@ -2,7 +2,7 @@ import { Avatar, Dropdown, Layout, Menu, Select, Space, Tag, Tooltip } from 'ant
 import {
   DashboardOutlined, DatabaseOutlined, ExperimentOutlined,
   LogoutOutlined, MessageOutlined, RocketOutlined, SettingOutlined, SoundOutlined,
-  ThunderboltOutlined, PieChartOutlined, SwapOutlined,
+  TeamOutlined, ThunderboltOutlined, PieChartOutlined, SwapOutlined,
 } from '@ant-design/icons';
 import { useEffect, useState } from 'react';
 import { Outlet, useLocation, useNavigate } from 'react-router-dom';
@@ -21,6 +21,8 @@ const NAV = [
   { key: '/insights', icon: <SoundOutlined />, labelKey: 'nav.insights' as StrKey },
   { key: '/dashboards', icon: <DashboardOutlined />, labelKey: 'nav.dashboards' as StrKey },
   { key: '/datasources', icon: <DatabaseOutlined />, labelKey: 'nav.datasources' as StrKey },
+  // 成员管理仅 admin（member:manage 权限）可见；权限由后端强制校验，前端隐藏只是 UX
+  { key: '/members', icon: <TeamOutlined />, labelKey: 'nav.members' as StrKey, permission: 'member:manage' },
 ];
 
 export function AppLayout() {
@@ -75,7 +77,9 @@ export function AppLayout() {
   const selected = NAV.find((n) => n.key === navKey);
   const pageTitle = selected ? t(selected.labelKey) : 'Helix BI';
 
-  const menuItems = NAV.map((n) => ({ key: n.key, icon: n.icon, label: t(n.labelKey) }));
+  const menuItems = NAV
+    .filter((n) => !('permission' in n) || !!context?.permissions.includes(n.permission!))
+    .map((n) => ({ key: n.key, icon: n.icon, label: t(n.labelKey) }));
 
   return (
     <Layout style={{ minHeight: '100vh' }}>
@@ -84,11 +88,11 @@ export function AppLayout() {
           position: 'fixed', left: 0, top: 0, bottom: 0, overflow: 'auto',
           background: '#0A1530',
         }}>
-        <div style={{ padding: '20px 16px 14px', display: 'flex', alignItems: 'center', gap: 10 }}>
-          <HelixBadge size={34} />
+        <div style={{ padding: '20px 16px 12px', display: 'flex', alignItems: 'center', gap: 10 }}>
+          <HelixBadge size={36} radius={10} />
           <div>
-            <div style={{ fontWeight: 700, fontSize: 15, color: '#fff' }}>绎数</div>
-            <div style={{ fontSize: 10, letterSpacing: 2, color: 'rgba(255,255,255,0.45)' }}>HELIX BI</div>
+            <div style={{ fontWeight: 700, fontSize: 15, color: '#fff', letterSpacing: 0.3 }}>绎数 Helix BI</div>
+            <div className="sider-tagline">Turn Data into Decisions.</div>
           </div>
         </div>
         <div style={{ height: 1, background: '#1A2A52', margin: '0 16px 8px' }} />
@@ -96,9 +100,36 @@ export function AppLayout() {
           onClick={({ key }) => navigate(key)}
           style={{ borderInlineEnd: 'none', padding: '0 8px', background: 'transparent' }} />
         <div style={{ position: 'absolute', bottom: 16, left: 16, right: 16 }}>
+          {/* 当前用户卡：企业级身份元素（头像 + 用户名 + 实时角色） */}
+          <div style={{
+            fontSize: 12, color: '#A4A097', display: 'flex', flexDirection: 'column', gap: 8,
+            background: 'rgba(255,255,255,0.05)', border: '1px solid rgba(255,255,255,0.08)',
+            borderRadius: 12, padding: '10px 12px', marginBottom: 10,
+          }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 9 }}>
+              <Avatar size={28} style={{
+                background: 'linear-gradient(135deg,#5645D4,#7B5CF5)',
+                fontWeight: 600, fontSize: 13, flexShrink: 0,
+              }}>
+                {(context?.username || 'U').slice(0, 1).toUpperCase()}
+              </Avatar>
+              <div style={{ minWidth: 0, flex: 1 }}>
+                <div style={{ color: '#fff', fontSize: 12.5, fontWeight: 600,
+                              overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                  {context?.username || profile.nickname}
+                </div>
+                {context?.role && (
+                  <span className={`role-tag-${context.role}`} style={{
+                    fontSize: 10.5, fontWeight: 600, borderRadius: 5,
+                    padding: '0 6px', lineHeight: '16px', display: 'inline-block', marginTop: 2,
+                  }}>{context.role}</span>
+                )}
+              </div>
+            </div>
+          </div>
           <div style={{
             fontSize: 12, color: '#A4A097', display: 'flex', flexDirection: 'column', gap: 6,
-            background: '#131F42', borderRadius: 8, padding: '10px 12px',
+            background: 'rgba(255,255,255,0.04)', borderRadius: 12, padding: '10px 12px',
           }}>
             <span>
               {t('status.sandbox')}：
@@ -136,16 +167,17 @@ export function AppLayout() {
               size="small"
               value={context.workspace_id}
               onChange={(v) => onSwitchWorkspace(v)}
-              style={{ width: 170, marginLeft: 12 }}
+              style={{ width: 190, marginLeft: 12 }}
               options={workspaces.map((w) => ({
                 value: w.workspace_id,
                 label: (
                   <Space size={6}>
                     <DatabaseOutlined style={{ color: '#5645D4' }} />
                     <span>{w.name}</span>
-                    <Tag color="purple" style={{ marginLeft: 'auto', marginRight: 0 }}>
-                      {w.role_code}
-                    </Tag>
+                    <span className={`role-tag-${w.role_code}`} style={{
+                      fontSize: 10.5, fontWeight: 600, borderRadius: 5,
+                      padding: '0 6px', lineHeight: '16px', border: '1px solid',
+                    }}>{w.role_code}</span>
                   </Space>
                 ),
               }))}
@@ -163,12 +195,21 @@ export function AppLayout() {
               <div
                 style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer', padding: '0 2px' }}
               >
-                <Avatar size={32} style={{ background: profile.avatar_color, fontWeight: 600, fontSize: 14 }}>
+                <Avatar size={32} style={{
+                  background: 'linear-gradient(135deg,#5645D4,#7B5CF5)',
+                  fontWeight: 600, fontSize: 14,
+                }}>
                   {(context?.username || profile.nickname || 'U').slice(0, 1).toUpperCase()}
                 </Avatar>
                 <span style={{ fontSize: 13, color: '#334155' }}>
                   {context?.username || profile.nickname}
                 </span>
+                {context?.role && (
+                  <span className={`role-tag-${context.role}`} style={{
+                    fontSize: 11, fontWeight: 600, borderRadius: 6,
+                    padding: '1px 8px', lineHeight: '18px', border: '1px solid',
+                  }}>{context.role}</span>
+                )}
               </div>
             </Tooltip>
           </Dropdown>

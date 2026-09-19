@@ -38,6 +38,7 @@ const STR = {
     'nav.insights': '主动洞察',
     'nav.dashboards': '仪表板',
     'nav.datasources': '数据源',
+    'nav.members': '成员管理',
     // 侧边栏状态
     'status.sandbox': '沙箱',
     'status.online': '在线',
@@ -137,6 +138,7 @@ const STR = {
     'nav.insights': 'Proactive Insights',
     'nav.dashboards': 'Dashboards',
     'nav.datasources': 'Data Sources',
+    'nav.members': 'Members',
     'status.sandbox': 'Sandbox',
     'status.online': 'Online',
     'status.offline': 'Offline',

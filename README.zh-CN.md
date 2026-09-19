@@ -35,13 +35,17 @@
 
 ## 界面预览
 
-| 对话分析（Agent 流式执行） | 工作台 |
+| 登录（Premium SaaS 分栏） | 工作台（品牌渐变 Hero） |
 |:---:|:---:|
-| ![对话分析](https://cdn.jsdelivr.net/gh/lyzrh/HelixBI@main/screenshots/chat.png) | ![工作台](https://cdn.jsdelivr.net/gh/lyzrh/HelixBI@main/screenshots/workbench.png) |
+| ![登录](https://cdn.jsdelivr.net/gh/lyzrh/HelixBI@main/screenshots/login.png) | ![工作台](https://cdn.jsdelivr.net/gh/lyzrh/HelixBI@main/screenshots/workbench.png) |
 
-| 自助分析（拖拽零 token 出图） | 主动洞察（定时扫描 + 概览） |
+| 对话分析（Agent 流式执行） | 自助分析（拖拽零 token 出图） |
 |:---:|:---:|
-| ![自助分析](https://cdn.jsdelivr.net/gh/lyzrh/HelixBI@main/screenshots/explore.png) | ![主动洞察](https://cdn.jsdelivr.net/gh/lyzrh/HelixBI@main/screenshots/insights.png) |
+| ![对话分析](https://cdn.jsdelivr.net/gh/lyzrh/HelixBI@main/screenshots/chat.png) | ![自助分析](https://cdn.jsdelivr.net/gh/lyzrh/HelixBI@main/screenshots/explore.png) |
+
+| 主动洞察（定时扫描 + 概览） | 工作区成员管理（RBAC） |
+|:---:|:---:|
+| ![主动洞察](https://cdn.jsdelivr.net/gh/lyzrh/HelixBI@main/screenshots/insights.png) | ![成员管理](https://cdn.jsdelivr.net/gh/lyzrh/HelixBI@main/screenshots/members.png) |
 
 | 数据源管理（上传 / 数据库 / SQL 查询） |
 |:---:|
@@ -51,7 +55,7 @@
 
 | 模块 | 能力 |
 | --- | --- |
-| **认证与权限** | 用户名 / 邮箱 + 口令登录（JWT）；用户 → 工作区成员 → 角色 → 权限四层解析出 UserContext，「同一个人在不同工作区可以是不同角色」；11 个权限点覆盖数据源 / SQL / 分析 / 仪表板 / Skill / 成员管理；权限一律后端判定，绕过前端直调同样被拒 |
+| **认证与权限** | 用户名 / 邮箱 + 口令登录（JWT）+ 自助注册（不授予角色）；用户 → 工作区成员 → 角色 → 权限四层解析出 UserContext，「同一个人在不同工作区可以是不同角色」；11 个权限点覆盖数据源 / SQL / 分析 / 仪表板 / Skill / 成员管理；admin 可视化添加 / 改角色 / 移除成员（末位管理员保护）；权限一律后端判定，绕过前端直调同样被拒 |
 | **对话分析** | 自然语言提问，SSE 流式展示步骤进度 / 代码 / 终端 / 图表 / 表格 / 结论；「先确认查询」模式可人工编辑 QuerySpec 再执行；失败自动修复重试（最多 3 次）；推荐追问一键续问 |
 | **自助分析** | 点击 / 拖拽字段即时出图（ECharts 交互渲染，本地计算零 token）；柱 / 线 / 饼 / 面 / 散点 / 堆叠等图表类型随时切换；聚合方式与排序可调 |
 | **场景 Agent** | 预置零售销售 / 生产制造行业专家：绑定语义包与数据源、开场白、推荐问题、启停管理，开箱即聊 |
@@ -82,10 +86,12 @@ LangGraph Agent → LLM → 权限检查 → Tools（沙箱执行）→ DataSour
 ```
 
 - **角色不可自选**：角色来自 `用户 → 工作区成员 → 角色 → 权限`，同一个人可以在销售工作区是分析师、在营销工作区只是查看者。
+- **自助注册**：登录页「注册」入口创建账号（用户名 / 邮箱 / 口令，pbkdf2 哈希存储）；注册只建立认证身份，**不授予任何工作区与角色**——即使请求体传入角色字段也会被忽略。注册用户由管理员在「成员管理」页加入工作区并分配角色后才能登录使用。
+- **成员管理**：admin 可在工作区成员页添加（按用户名）/ 改角色 / 移除成员；末位管理员不能被降级或移除（防止工作区锁死）；成员管理只能作用于自己所在的工作区。
 - **权限点**：`datasource:read/write`、`sql:execute`、`analysis:create/execute`、`dashboard:read/write`、`skill:read/write`、`workspace:manage`、`member:manage`。
 - **判断单一入口**：后端一律走 `permission_checker.has_permission(user_context, "datasource:write")`，不硬编码角色；LLM 不参与授权决定。
 - **绕过前端无效**：前端隐藏按钮只是体验优化，Viewer 直接调 API 一律 403。
-- **数据隔离**：数据源 / Skill / 会话都带工作区归属，跨工作区访问被拒；Skill 另有 global / workspace / user 三级作用域。
+- **数据隔离**：数据源 / Skill / 会话 / 仪表板都带工作区归属，跨工作区访问被拒；Skill 另有 global / workspace / user 三级作用域；历史全局仪表板（`workspace_id=NULL`）对所有工作区可见以保持兼容。
 - **默认账号**：内置管理员 `admin / admin123`（**首次部署后请立即改密并新建账号**）。
 
 内置角色与权限集合：
@@ -331,7 +337,7 @@ curl http://127.0.0.1:8000/api/datasources \
 
 | 分组 | 端点 | 权限 |
 | --- | --- | --- |
-| 认证 / 工作区 | `/api/auth/login`（公开）`/me` `/switch-workspace` `/roles` `/permissions` `/users` `/workspaces/{id}/members` | 登录；用户与成员管理需 `workspace:manage` / `member:manage` |
+| 认证 / 工作区 | `/api/auth/register`（公开，仅建账号不授权）`/login`（公开）`/me` `/switch-workspace` `/roles` `/permissions` `/users` `/workspaces/{id}/members`（GET/POST/PATCH/DELETE） | 登录；用户与成员管理需 `workspace:manage` / `member:manage` |
 | 对话与分析 | `/api/sessions...`、`/api/sessions/{id}/analyze`、`/api/runs/{id}/rerun`、`/api/runs/{id}/export` | `analysis:create` / `analysis:execute`（分析类为 **SSE**） |
 | 数据源与自助 | `/api/datasources...`、`/api/explore/schema` `/profile` `/query` `/sql` | `datasource:read` / `datasource:write` / `sql:execute` / `analysis:execute` |
 | Skill / 仪表板 / 洞察 | `/api/skills...`、`/api/dashboards...`、`/api/insights...` | `skill:read/write`、`dashboard:read/write`；洞察为登录 |

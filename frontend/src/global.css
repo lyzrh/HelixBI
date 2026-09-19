@@ -87,3 +87,37 @@ body {
   transition: all .15s; box-shadow: 0 1px 2px rgba(15,23,42,.04);
 }
 .quick-pill:hover { border-color: #A18BE8; color: #4534B3; background: #FAF9FE; }
+
+/* ---- Premium SaaS 视觉规范（克制使用渐变）---- */
+
+/* 品牌渐变：主 CTA / Hero 横幅。仅这两处使用，避免过度炫技 */
+.brand-gradient { background: linear-gradient(120deg, #2B1B66 0%, #5645D4 52%, #2F6BFF 100%); }
+.brand-gradient-soft { background: linear-gradient(135deg, #5645D4 0%, #7B5CF5 60%, #2F6BFF 130%); }
+
+/* 认证页左侧品牌面板：深海军蓝底 + 微弱光晕 */
+.auth-panel {
+  background:
+    radial-gradient(560px 380px at 82% 12%, rgba(86,69,212,0.42), transparent 62%),
+    radial-gradient(420px 320px at 12% 92%, rgba(47,107,255,0.22), transparent 60%),
+    #0A1530;
+}
+
+/* 浅色内容卡片：轻阴影 + 悬浮抬升（用于可点击卡片） */
+.saas-card {
+  transition: box-shadow .18s ease, transform .18s ease;
+}
+.saas-card:hover { box-shadow: 0 8px 24px rgba(16,24,40,0.10) !important; transform: translateY(-2px); }
+
+/* 角色 / 状态标签语义色（企业级元素，克制传达权限差异） */
+.role-tag-admin { color: #B42318; background: #FEF0EF; border-color: #FADCDC; }
+.role-tag-analyst { color: #4534B3; background: #EFECFB; border-color: #DDD4F6; }
+.role-tag-viewer { color: #175CD3; background: #EFF4FF; border-color: #D5E3FF; }
+
+/* 侧边栏品牌区标语 */
+.sider-tagline { font-size: 10px; color: rgba(255,255,255,0.38); letter-spacing: .4px; }
+
+/* 登录/注册左右分栏 */
+.auth-split { min-height: 100vh; display: flex; }
+.auth-side { flex: 1 1 46%; display: flex; flex-direction: column; justify-content: space-between; padding: 44px 52px; color: #fff; }
+.auth-main { flex: 1 1 54%; display: flex; align-items: center; justify-content: center; background: #F7F8FC; padding: 24px; }
+@media (max-width: 900px) { .auth-side { display: none; } .auth-main { flex: 1 1 100%; } }

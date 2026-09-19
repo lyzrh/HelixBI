@@ -79,42 +79,45 @@ export function Workbench() {
 
   return (
     <div style={{ padding: 24, maxWidth: 1240, margin: '0 auto' }}>
-      {/* 欢迎横幅：深海军蓝 + 紫色主 CTA（绎紫设计系统） */}
-      <div style={{
-        borderRadius: 12, padding: '32px 36px', color: '#fff', position: 'relative', overflow: 'hidden',
-        background: '#0A1530',
+      {/* 欢迎横幅：品牌渐变（Premium SaaS 主视觉，全站唯一大面积渐变） */}
+      <div className="brand-gradient" style={{
+        borderRadius: 16, padding: '34px 38px', color: '#fff', position: 'relative', overflow: 'hidden',
+        boxShadow: '0 10px 30px rgba(47,27,102,0.28)',
       }}>
         <div style={{
-          position: 'absolute', right: -40, top: -60, width: 260, height: 260, borderRadius: '50%',
-          background: 'rgba(86,69,212,0.18)',
+          position: 'absolute', right: -60, top: -80, width: 320, height: 320, borderRadius: '50%',
+          background: 'rgba(255,255,255,0.07)',
         }} />
         <div style={{
-          position: 'absolute', right: 90, bottom: -80, width: 190, height: 190, borderRadius: '50%',
-          background: 'rgba(255,255,255,0.04)',
+          position: 'absolute', right: 120, bottom: -110, width: 240, height: 240, borderRadius: '50%',
+          background: 'rgba(255,255,255,0.05)',
         }} />
         <div style={{ position: 'relative' }}>
-          <div style={{ fontSize: 13, color: '#D6B6F6', fontWeight: 500 }}>{t('wb.eyebrow')}</div>
-          <div style={{ fontSize: 26, fontWeight: 600, margin: '6px 0 10px', letterSpacing: -0.5 }}>
+          <div style={{ fontSize: 12, color: 'rgba(255,255,255,0.72)', fontWeight: 600, letterSpacing: 1.2 }}>
+            TURN DATA INTO DECISIONS.
+          </div>
+          <div style={{ fontSize: 27, fontWeight: 700, margin: '8px 0 10px', letterSpacing: -0.5 }}>
             {t('wb.title')}
           </div>
-          <div style={{ fontSize: 13.5, color: '#A4A097', maxWidth: 620, lineHeight: 1.7 }}>
+          <div style={{ fontSize: 13.5, color: 'rgba(255,255,255,0.78)', maxWidth: 620, lineHeight: 1.7 }}>
             {t('wb.body')}
           </div>
-          <div style={{ display: 'flex', gap: 12, marginTop: 18 }}>
-            <Button type="primary" size="large" onClick={() => navigate('/chat')}
-              style={{ fontWeight: 500 }}>
+          <div style={{ display: 'flex', gap: 12, marginTop: 20 }}>
+            <Button size="large" onClick={() => navigate('/chat')}
+              style={{ fontWeight: 600, border: 'none', color: '#4534B3', background: '#fff',
+                       boxShadow: '0 2px 8px rgba(10,21,48,0.18)' }}>
               {t('wb.btnChat')} <ArrowRightOutlined />
             </Button>
             <Button size="large" ghost onClick={() => navigate('/explore')}
-              style={{ color: '#fff', borderColor: '#A4A097' }}>
+              style={{ color: '#fff', borderColor: 'rgba(255,255,255,0.55)' }}>
               {t('wb.btnExplore')}
             </Button>
           </div>
-          <div style={{ marginTop: 14, display: 'flex', gap: 8 }}>
-            <Tag style={{ background: '#1A2A52', color: '#A4A097', border: 'none', borderRadius: 999 }}>
+          <div style={{ marginTop: 16, display: 'flex', gap: 8 }}>
+            <Tag style={{ background: 'rgba(255,255,255,0.12)', color: '#fff', border: 'none', borderRadius: 999 }}>
               {t('wb.chipModel')}：{health?.llm_configured ? health.model : t('status.notConfigured')}
             </Tag>
-            <Tag style={{ background: '#1A2A52', color: '#A4A097', border: 'none', borderRadius: 999 }}>
+            <Tag style={{ background: 'rgba(255,255,255,0.12)', color: '#fff', border: 'none', borderRadius: 999 }}>
               {t('wb.chipSandbox')}：{health?.sandbox ? t('status.online') : t('status.offline')}
             </Tag>
           </div>
