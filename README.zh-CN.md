@@ -25,7 +25,7 @@
 登录 → 选择工作区（角色 / 权限 / 数据范围随之确定）
   → 连接数据（文件 / 数据库，归属工作区）
   → 对话提问（可选口径确认）
-  → SSE 流式分析（Skill 命中秒级重放 / 未命中 LLM 生成 + 失败自修复）
+  → SSE 流式分析（Skill 检索命中 → 秒级重放、零 token；不命中 / 重放失败 → LLM 生成 + 失败自修复）
   → 结论 + 图表 + 表格 + 追问
   → 沉淀为 Skill / 固定到仪表板
   → 定时洞察扫描 → LLM 经营诊断 → 仪表板 → 导出报告
@@ -59,15 +59,15 @@
 | **对话分析** | 自然语言提问，SSE 流式展示步骤进度 / 代码 / 终端 / 图表 / 表格 / 结论；「先确认查询」模式可人工编辑 QuerySpec 再执行；失败自动修复重试（最多 3 次）；推荐追问一键续问 |
 | **自助分析** | 点击 / 拖拽字段即时出图（ECharts 交互渲染，本地计算零 token）；柱 / 线 / 饼 / 面 / 散点 / 堆叠等图表类型随时切换；聚合方式与排序可调 |
 | **场景 Agent** | 预置零售销售 / 生产制造行业专家：绑定语义包与数据源、开场白、推荐问题、启停管理，开箱即聊 |
-| **Skill 库** | 验证过的分析路径自动沉淀为可复用 Skill；相似问题直接重放代码（秒回）；列结构变化时作为 few-shot 参考重新生成；三级作用域 global / workspace / user 防串数据；使用 / 成功率统计 |
+| **Skill 库** | 验证过的分析路径自动沉淀为可复用 Skill；**检索 V2**：8 路可解释信号打分 + 重放准入（指标 / 维度 / 分析类型 / 排序方向 / TopN / 时间窗 / 数据源指纹任一不符就不重放），命中即秒回、**零 LLM 调用**，不命中或重放失败自动回到完整 Agent；三级作用域 global / workspace / user 防串数据；使用 / 成功率统计 |
 | **主动洞察** | 定时扫描全部数据源：指标突变 / 连续趋势 / 异常值 / 头部份额变化 / 阈值越界（自动剔除残月避免误报）；新告警 LLM 自动诊断（现象 → 证据 → 原因 → 建议）；概览统计卡 + 状态流转 |
 | **仪表板** | 对话中的图表 / 表格 / 结论、洞察诊断一键固定；网格布局浏览；导出自包含 HTML 报告 |
 | **数据源** | CSV / Excel / Parquet 上传；MySQL / PostgreSQL / SQLite 连接（先测试后保存）；**数据源归属工作区**，跨工作区不可见也不可进沙箱；DB 表物化为 parquet 缓存后进沙箱；数据预览 + **只读 SQL 查询**（本地 sqlite 执行，零 token） |
 | **语义层** | 行业语义包定义指标（含派生公式：良率、达成率、客单价等）、维度、同义词、时间口径、图表建议，注入生成 prompt 保证口径一致 |
 | **设置中心** | LLM 接口热更新（DeepSeek / 智谱 / 通义 / OpenAI 兼容接口，保存即生效）；偏好设置（回答风格 / 创意度 / 追问开关 / 自定义指令）；**界面语言中英切换**（导航 / 工作台 / 设置中心即时生效，本地持久化）；个人资料 |
 | **可靠性** | 沙箱无网络 + CPU / 内存限制 + 数据只读；`dahelper` JSON 契约回传；SQLite 元数据库 WAL 模式；认证与权限在 API 层、运行时、工具执行前三次收口 |
-| **评估体系** | 65 条固定问题集（零售 / 制造 / 口语化对抗样例）+ 分阶段指标报告（语义解析 / 口径注入 / Skill 匹配 / 重放准入）；指标作为 CI 门禁进 pytest |
-| **可观测性** | 每轮分析落 `Run.trace`：分阶段耗时、LLM 调用与 token、Skill 命中模式、六项结果验收、**触发者用户 / 工作区 / 角色**；前端「运行时间线」面板可展开查看——Skill 重放的 `LLM calls == 0` 是数据不是文案 |
+| **评估体系** | 65 条固定问题集（零售 / 制造 / 口语化对抗样例）+ **20 条对抗准入样例**（同指标不同维度 / 排序方向相反 / 时间窗变化 / 数据源变化 / 相似 Skill 竞争…）+ 分阶段指标报告（语义解析 / 口径注入 / Skill 检索 / 重放准入 / 效率）；基线可复现（V1 策略冻结留档），指标作为 CI 门禁进 pytest 与 CI |
+| **可观测性** | 每轮分析落 `Run.trace`：分阶段耗时、LLM 调用与 token、**Skill 检索档案（候选 8 路分数 / 选中项 / 准入结论 / 拒绝与 fallback 原因）**、六项结果验收、**触发者用户 / 工作区 / 角色**；前端「运行时间线」面板可展开查看——Skill 重放的 `LLM calls == 0` 是数据不是文案 |
 
 ## 认证与权限（RBAC）
 
@@ -129,7 +129,8 @@ Docker 沙箱执行            无网络 + 资源限制 + 数据只读
 `python -m backend.evaluation` 输出分阶段评估报告（离线可跑，不需 Docker / LLM；
 需要沙箱的阶段在资源缺失时如实标注「未采集」而不是编造数字）。
 
-当前真实指标（65 条固定问题：零售 25 + 制造 25 + 口语化对抗样例 15）：
+当前真实指标（65 条固定问题：零售 25 + 制造 25 + 口语化对抗样例 15；另有 20 条
+自带候选池的**对抗准入样例**，见下）：
 
 ```
 Evaluation Report — HelixBI Agent Pipeline
@@ -144,16 +145,46 @@ Evaluation Report — HelixBI Agent Pipeline
 口径注入完整率               96.6%   (113/117 条口径)
   已解析口径渲染保真度        100.0%  (113/113)
   派生指标公式注入           100.0%  (19/19)
-Skill 匹配 Top1 准确率       72.3%   （65 次查询 / 33 条沉淀路径）
-Skill 匹配 Recall@2          86.2%
-重放准入判定正确率           100.0%  (65/65)
+Skill 检索 Top1 准确率       78.5%   （65 次查询 / 33 条沉淀路径；基线 72.3%）
+Skill 检索 Recall@3          90.8%   Recall@2 89.2%
+重放准入判定正确率           100.0%  (65/65)  结构守卫
+Skill Retrieval V2（完整路径签名口径：包 / 指标 / 维度 / 类型 / 排序 / 时间窗）
+  检索 Top1                  100.0%  (基线 95.4%)
+  重放 Precision / Recall    100.0% / 96.9%
+  False Replay Rate          0.0%    (基线 4.6%，3 条 → 0 条)
+  准入判定正确率（对抗集）     100.0%  (20 条；基线 50.0%，误放行 10 → 0)
+  LLM 调用 / 查询            0.09    (计入误重放后 0.09；基线 0.14)
 代码执行 / 自修复 / 端到端    需 Docker 沙箱，资源缺失时如实标注「未采集」
 ```
 
-评估不是摆设，它直接驱动过两次真实修复：
+评估不是摆设，它直接驱动过三次真实修复：
 口语化对抗样例（60%）暴露了语义包同义词缺口（如「地区」）与排名词缺口（如「最长」），
-修复后标准表述达 100%；Skill 匹配引入语义解析骨架后 Top1 从 64.6% 提升到 72.3%、
-Recall@2 从 76.9% 提升到 86.2%。指标阈值同时作为 pytest 门禁（`tests/evaluation/`）。
+修复后标准表述达 100%；Skill 匹配引入语义解析骨架后 Top1 从 64.6% 提升到 72.3%；
+Skill Retrieval V2 在此基础上把 Top1 提到 78.5%，并用**重放准入**把错误重放从 4.6% 降到 0。
+指标阈值同时作为 pytest 门禁（`tests/evaluation/`），并进 CI（见下）。
+
+### Skill Retrieval V2 / Replay Admission
+
+改造前 Skill 在分析链路里只是 few-shot 素材，真正的重放只存在于「手动运行 Skill」；
+重放守卫也只看列结构与读取函数，**指标 / 维度 / 排序方向 / 时间窗完全不同也会重放**，
+返回「看起来对、口径错」的结果。V2 把它做成一个可评估、可解释、安全的检索 + 路由系统：
+
+```
+Query → Semantic Resolution → Candidate Retrieval → Top-K 打分（8 路可解释信号）
+      → Replay Admission（blocker 硬约束 + High/Medium/Low 分层）→ Replay（0 次 LLM）或完整 Agent
+```
+
+- **宁可放弃重放，也不能错误重放**：指标 / 维度 / 分析类型 / 排序方向 / TopN / 时间窗 /
+  数据源指纹 / 列结构 / 读取函数任一不满足 → 一律走 Agent，并在 trace 里写明是哪一条；
+- **不新增 LLM 调用**：所有信号来自确定性语义解析与 Skill metadata，权重集中配置在
+  `backend/config.py`，并用 `--tune-weights --sensitivity` 在评测集上标定与验证；
+- **安全回退**：重放执行失败会自动回到完整 Agent，用户拿到的是结果而不是报错；
+- **可回答「为什么」**：`Run.trace.skill.retrieval` 记录候选、8 路分数、准入结论、拒绝原因
+  与 fallback 原因（`replay_failed` / `admission_declined:*` / `datasource_changed:*` …）。
+
+对标 Baseline（V1 冻结策略）的完整对比表、权重标定过程与遗留问题：
+[`docs/skill-retrieval-v2.md`](docs/skill-retrieval-v2.md)；一键复现
+`python -m backend.evaluation --benchmark`。
 
 ## 可观测性
 
@@ -161,11 +192,24 @@ Recall@2 从 76.9% 提升到 86.2%。指标阈值同时作为 pytest 门禁（`t
 
 - **分阶段耗时**：意图解析 → 语义解析 → Skill 匹配 → 代码生成 → 沙箱执行 → 总结
 - **LLM 用量**：调用次数（按节点分布）、输入 / 输出 token、成本——Skill 重放轮为 0
+- **Skill 检索档案**：候选 Skill 及各自 8 路分数、选中项、准入结论与拒绝原因、
+  重放还是 fallback 到 Agent——「为什么没重放」「为什么选中它」都能从 trace 直接回答
 - **结果验收**：执行成功 / 有产物 / 结论非空 / 图表文件真实存在 / 表格结构完整 / stderr 干净，六项检查与 `ok` 状态解耦
 - **触发者**：本轮的用户 / 工作区 / 角色，便于按人按工作区审计
 - **失败留痕**：失败的运行同样写 trace，排查问题时那一轮才是最需要看的
 
 前端历史消息新增「运行时间线」面板，展开即可看到上述全部内容。
+
+## CI 门禁
+
+`.github/workflows/ci.yml` 除 `pytest -q` 外还跑离线评估，并用独立步骤断言：
+
+- Replay Precision 不低于 Baseline；
+- False Replay 不恶化，且必须为 **0**；
+- 准入判定正确率 ≥ 90%、对抗集**零误放行**。
+
+阈值只收紧不放宽，评估数据集没有为了过门禁被改动。
+
 
 ## 架构
 
@@ -297,11 +341,12 @@ backend/                # FastAPI 服务（按业务领域组织）
                         #   + permission_checker） deps（登录门 / 权限门）
   agent/                # Agent 内核：graph prompts profiler sandbox
   analysis/             # Analysis Runtime（runtime）+ 自助分析（explore）
-  skills/               # Skill 沉淀 / 匹配 / 重放（含作用域隔离）
+  skills/               # Skill 沉淀 / 检索（retrieval：打分+准入）/ 重放（含作用域隔离）
   insights/             # 规则扫描（engine）+ 定时调度（scheduler）
   datasource/           # 文件 / DB 接入 + parquet 物化
   semantic/             # 语义包运行时（registry 加载 + render 渲染 + resolver 确定性解析）
-  evaluation/           # 评估流水线：数据集 / 指标 / 运行器（python -m backend.evaluation）
+  evaluation/           # 评估流水线：数据集 / 指标 / 运行器 / 检索基准 / 效率模型
+                        #   （python -m backend.evaluation [--benchmark|--tune-weights]）
   report/               # 报告导出（builder 单轮 / exporter 仪表板）
 semantic_packs/         # 行业语义包（retail_sales / manufacturing_production yaml）
 sandbox/                # 独立执行环境：沙箱镜像（pandas/pyarrow/matplotlib/

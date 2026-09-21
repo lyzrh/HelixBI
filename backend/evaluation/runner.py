@@ -202,8 +202,12 @@ def _skill_groups(cases: list[dict]) -> dict[tuple, list[dict]]:
     return groups
 
 
-def eval_skills(cases: list[dict], session=None) -> dict:
-    """用真实 `match_skills` 度量：匹配到的是不是同一条分析路径。"""
+def eval_skills(cases: list[dict], session=None, k: int = 3,
+                policy: str = "v2") -> dict:
+    """用真实 `match_skills` 度量：匹配到的是不是同一条分析路径。
+
+    `policy="v1"` 时走冻结的 V1 词面打分（Baseline 对比用）。
+    """
     from sqlalchemy import create_engine
     from sqlalchemy.orm import sessionmaker
 
@@ -238,28 +242,32 @@ def eval_skills(cases: list[dict], session=None) -> dict:
 
         # 每条查询只对应「一条」正确路径，因此 precision@k 会被 k 结构性截断（≤1/k）。
         # 对 Skill Router 而言真正有意义的是：Top1 是否命中，以及正确路径是否进了候选集。
-        k = 2
         top1 = Counter()
         recall_at_k = Counter()
+        recall_at_2 = Counter()
         hits = Counter()
         for case in cases:
             exp = case.get("expected", {})
             key = (case["pack"], tuple(sorted(exp.get("metrics", []))),
                    exp.get("analysis_type", "unknown"))
             matched = skill_engine.match_skills(session, case["question"],
-                                                pack_id=case["pack"], limit=k)
+                                                pack_id=case["pack"], limit=k,
+                                                policy=policy)
             hits.add(bool(matched))
             pred_keys = [key_by_skill_id.get(s.id) for s in matched if s.id in key_by_skill_id]
             top1.add(bool(pred_keys) and pred_keys[0] == key)
             recall_at_k.add(key in pred_keys)
+            recall_at_2.add(key in pred_keys[:2])
         return {
             "status": "ok",
+            "policy": policy,
             "queries": len(cases),
             "groups": len(groups),
             "k": k,
             "top1_accuracy": top1.rate,
             "top1_hits": top1.hits,
             "recall": recall_at_k.rate,
+            "recall_at_2": recall_at_2.rate,
             "hit_rate": hits.rate,
         }
     finally:
@@ -312,7 +320,53 @@ def eval_replay_guard(cases: list[dict]) -> dict:
     }
 
 
-# ---- 5. 端到端（需 Docker + LLM，缺失则跳过） ----
+# ---- 5. Skill 检索 V2 / 重放准入（离线，V1 vs V2 同一把尺子）----
+
+def eval_retrieval_admission(top_k: int = 5) -> dict:
+    """度量「该不该重放」：V1（Baseline）与 V2 在同一批用例、同一候选池上的对比。
+
+    与 `eval_skills` 的分工：
+    - `eval_skills` 回答「召回得对不对」（口径 = 语义包 + 指标 + 分析类型）；
+    - 本阶段回答「重放得对不对」（口径 = 完整路径签名，含维度 / 排序 / 时间窗），
+      并给出 False Replay、准入判定正确率与 LLM 调用 / Token / 延迟 / 成本。
+    """
+    from backend.evaluation import retrieval_bench as bench
+
+    result = bench.evaluate(top_k=top_k)
+    v1, v2 = result["policies"]["v1"], result["policies"]["v2"]
+    delta = {}
+    for metric in ("top1_accuracy", "recall_at_2", "replay_precision", "replay_recall",
+                   "false_replay_rate", "agent_fallback_rate", "misreplay_queries",
+                   "admission_accuracy", "false_accept", "false_reject",
+                   "llm_calls_per_query", "llm_calls_per_query_incl_misreplay",
+                   "avg_tokens_per_query", "avg_latency_ms",
+                   "cost_usd_per_query"):
+        a = _dig(v1, metric)
+        b = _dig(v2, metric)
+        delta[metric] = (None if a is None or b is None else round(b - a, 6))
+    return {
+        "status": "ok",
+        "dataset": result["dataset"],
+        "v1": {"fine": v1["fine"], "coarse": v1["coarse"], "admission": v1["admission"],
+               "efficiency": v1["efficiency"]},
+        "v2": {"fine": v2["fine"], "coarse": v2["coarse"], "admission": v2["admission"],
+               "efficiency": v2["efficiency"]},
+        "delta": delta,
+        # 保留明细，供 --verbose / 门禁测试定位问题（不落 JSON 报告）
+        "_outcomes": result.get("_outcomes"),
+    }
+
+
+def _dig(entry: dict, metric: str):
+    """按 fine → admission → efficiency 的顺序取指标（不同指标的归属阶段不同）。"""
+    for stage in ("fine", "admission", "coarse", "efficiency"):
+        value = entry.get(stage, {}).get(metric)
+        if value is not None:
+            return value
+    return None
+
+
+# ---- 6. 端到端（需 Docker + LLM，缺失则跳过） ----
 
 def pipeline_blocker() -> str | None:
     """返回阻塞原因；None 表示可以真实跑链路。
@@ -420,6 +474,8 @@ def run_all(with_pipeline: bool = False, limit: int = 3) -> dict:
     report["planning"] = eval_planning(cases)
     report["skills"] = eval_skills(cases)
     report["replay"] = eval_replay_guard(cases)
+    report["retrieval"] = eval_retrieval_admission()
+    report["baseline_skills"] = eval_skills(cases, policy="v1")
 
     if with_pipeline:
         pipeline = eval_pipeline(cases, limit=limit)
@@ -442,4 +498,5 @@ def run_all(with_pipeline: bool = False, limit: int = 3) -> dict:
 
 
 __all__ = ["run_all", "eval_semantic", "eval_planning", "eval_skills",
-           "eval_replay_guard", "eval_pipeline", "pipeline_blocker"]
+           "eval_replay_guard", "eval_retrieval_admission", "eval_pipeline",
+           "pipeline_blocker"]

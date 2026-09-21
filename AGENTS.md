@@ -47,11 +47,11 @@ pytest -q
 | `backend/auth/` | 认证与 RBAC 领域：`security.py`（pbkdf2 口令 + JWT）、`context.py`（UserContext 解析 + `permission_checker` 唯一权限入口）、`deps.py`（`get_current_context` / `require_permission`） |
 | `backend/agent/` | Agent 内核：`graph.py`（parse_intent → generate_code → execute 自修复 → summarize → followup）、`prompts.py`、`profiler.py`、`sandbox.py`（Docker 沙箱客户端） |
 | `backend/analysis/` | Analysis Runtime：`runtime.py`（驱动分析链路 + SSE 事件映射 + 落库）、`explore.py`（自助分析，本地零 token） |
-| `backend/skills/` | Skill 领域：沉淀 / 匹配 / 重放 / few-shot 渲染（含 global/workspace/user 三级作用域） |
+| `backend/skills/` | Skill 领域：`engine.py`（沉淀 / few-shot / 重放执行 + 兜底）、`retrieval.py`（**检索 V2**：Candidate 召回 → 8 路可解释打分 → Replay Admission 准入，全确定性零 token） |
 | `backend/insights/` | 主动洞察：`engine.py` 规则扫描 + LLM 诊断，`scheduler.py` 定时调度 |
 | `backend/datasource/` | 数据源接入：文件 / DB 连接、预览、parquet 物化（数据源归属工作区） |
 | `backend/semantic/` | 语义层运行时：解释 `semantic_packs/`（`registry.py` 加载检索、`render.py` 渲染 prompt、`resolver.py` 确定性解析——零 token 可离线评估） |
-| `backend/evaluation/` | 评估流水线：固定问题集（datasets/）、指标聚合（metrics.py）、分阶段运行器（runner.py）；CLI：`python -m backend.evaluation` |
+| `backend/evaluation/` | 评估流水线：固定问题集（datasets/）、对抗准入样例（datasets/admission/）、指标聚合（metrics.py）、分阶段运行器（runner.py）、检索基准（retrieval_bench.py）、效率模型（efficiency.py）；CLI：`python -m backend.evaluation [--benchmark|--tune-weights|--with-pipeline]` |
 | `backend/report/` | 报告导出：`builder.py` 单轮分析 HTML、`exporter.py` 仪表板导出 |
 | `backend/config.py` `db.py` `models.py` `schemas.py` `seed.py` | 基础设施：全局配置单一入口、SQLite 引擎（WAL）、ORM 与 API 模型、内置种子数据（含 RBAC 角色 / 权限 / 默认工作区 / 管理员） |
 | `tests/` | pytest 套件；`tests/evaluation/` 是评估指标门禁，`tests/test_auth_rbac.py` 是认证 / 工作区 / 权限用例 |
@@ -75,7 +75,8 @@ pytest -q
 8. **可观测性跟随运行**：分析链路（含 Skill 重放）的行为变化要同步维护 `Run.trace`（`backend/analysis/runtime.py::_build_trace` / `backend/skills/engine.py::_replay_trace`）与 `backend/analysis/validation.py` 的验收项，失败轮同样留痕。
 9. **指标改动必须过评估门禁**：改语义包解析、Skill 匹配等影响口径/检索的行为后，跑 `python -m backend.evaluation` 并确认 `tests/evaluation/` 阈值不回退；报告里缺资源的阶段如实标注「未采集」，禁止编造数字。
 10. **权限只由后端决定**：Login 只认证；角色 / 权限由 `User → WorkspaceMember → Role → Permission` 实时解析成 UserContext，判断一律走 `permission_checker.has_permission()`，**禁止硬编码角色判断**，LLM 不参与授权。新增业务 router 必须挂 `get_current_context`，写 / 执行类端点必须挂 `require_permission(...)`。
-11. **数据与资产按工作区隔离**：数据源 / Skill / 会话都带 `workspace_id`（Skill 另有 global/workspace/user 作用域），读取与沙箱入口都要按工作区过滤，禁止跨工作区串数据。
+11. **数据与资产按工作区隔离**：数据源 / Skill / 会话都带 `workspace_id`（Skill 另有 global/workspace/user 作用域），读取与沙箱入口都要按工作区过滤，禁止跨工作区串数据。**user 作用域只看本人**，不走 workspace_id 命中。
+12. **Skill 重放必须过准入，禁止绕过**：任何重放（含手动运行）都要经 `backend/skills/retrieval.py` 的硬约束校验（指标 / 维度 / 分析类型 / 排序方向 / TopN / 时间窗 / 数据源指纹 / 列结构 / 读取函数），并遵循 `AdmissionDecision`；`decision != replay` 时只能走 Agent + few-shot。**宁可放弃重放，也不能错误重放**；重放执行失败必须回退 Agent，不得把错误直接抛给用户。改动检索/准入逻辑后必须重跑 `python -m backend.evaluation --benchmark` 确认 False Replay 仍为 0（`tests/evaluation/test_retrieval_gate.py` 是 CI 门禁）。
 
 ## 按需阅读的规则索引
 

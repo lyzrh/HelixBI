@@ -11,9 +11,9 @@ from backend.evaluation.metrics import render_report
 from backend.semantic import list_packs
 from backend.semantic.registry import load_pack
 
-REQUIRED_SECTIONS = ("dataset", "semantic", "planning", "skills", "replay",
-                     "execution", "self_repair", "end_to_end")
-OFFLINE_STAGES = ("semantic", "planning", "skills", "replay")
+REQUIRED_SECTIONS = ("dataset", "semantic", "planning", "skills", "baseline_skills",
+                     "replay", "retrieval", "execution", "self_repair", "end_to_end")
+OFFLINE_STAGES = ("semantic", "planning", "skills", "baseline_skills", "replay", "retrieval")
 GATED_STAGES = ("execution", "self_repair", "end_to_end")
 
 # 各阶段用于比较的"主指标"字段名
@@ -21,7 +21,9 @@ PRIMARY_METRIC = {
     "semantic": "accuracy",
     "planning": "coverage",
     "skills": "top1_accuracy",
+    "baseline_skills": "top1_accuracy",
     "replay": "eligibility_rate",
+    "retrieval": "status",
 }
 
 
@@ -93,7 +95,8 @@ def test_render_report_contains_key_metrics(report):
     text = render_report(report)
     assert "Evaluation Report" in text
     assert "语义解析准确率" in text
-    assert "Skill 匹配 Top1 准确率" in text
+    assert "Skill 检索 Top1 准确率" in text
+    assert "False Replay Rate" in text
     assert "未采集" in text, "未采集阶段必须显式标注，而不是留空"
 
 

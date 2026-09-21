@@ -18,6 +18,35 @@ jobs:
         run: pip install -r requirements.txt -r requirements-dev.txt
       - name: Run tests
         run: pytest -q
+      # 评估门禁：离线阶段（语义解析 / 口径注入 / Skill 检索 / 重放准入）确定性可复现，
+      # 阈值断言在 tests/evaluation/ 里；这里额外把报告与 Benchmark 打进 CI 日志，
+      # 并在 False Replay 非 0 时直接失败——「错误重放比不重放更糟」。
+      - name: Evaluation report
+        run: python -m backend.evaluation --json /tmp/evaluation.json
+      - name: Skill Retrieval Benchmark (Baseline vs V2)
+        run: python -m backend.evaluation --benchmark --json /tmp/benchmark.json
+      - name: Replay admission regression gate
+        run: |
+          python - <<'PY'
+          import json, sys
+          r = json.load(open('/tmp/evaluation.json'))['retrieval']
+          v1, v2 = r['v1'], r['v2']
+          checks = [
+              ("Replay Precision 不低于 baseline",
+               v2['fine']['replay_precision'] >= v1['fine']['replay_precision']),
+              ("False Replay 未恶化",
+               v2['fine']['false_replay_rate'] <= v1['fine']['false_replay_rate']),
+              ("False Replay = 0", v2['fine']['false_replay_rate'] == 0.0),
+              ("准入判定正确率 ≥ 90%", v2['admission']['admission_accuracy'] >= 0.90),
+              ("对抗集无误放行", v2['admission']['false_accept'] == 0),
+          ]
+          failed = [name for name, ok in checks if not ok]
+          for name, ok in checks:
+              print(f"[{'PASS' if ok else 'FAIL'}] {name}")
+          if failed:
+              print(f"评估门禁未通过：{failed}")
+              sys.exit(1)
+          PY
 
   frontend:
     runs-on: ubuntu-latest

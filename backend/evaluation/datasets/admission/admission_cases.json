@@ -1,0 +1,284 @@
+{
+  "_meta": {
+    "version": 1,
+    "kind": "adversarial_admission",
+    "granularity": "每条 case 自带候选池（candidates）与数据上下文（context），使「该不该重放」有唯一正确答案；不参与语义解析准确率统计（故独立目录、独立加载器）。",
+    "notes": "覆盖容易误匹配的对抗场景：同指标不同维度 / 同维度不同指标 / 相似自然语言不同业务含义 / 不同数据源 / 不同时间范围与粒度 / 排序方向相反 / TopN 变化 / 查询条件变化 / 同义词（应当放行）/ 相似 Skill 竞争（应当选中正确那条）/ 库里没有对应路径（应当放弃重放）。判定依据（reason_code）与 backend/skills/retrieval.py 的 blocker 命名一致。",
+    "expect_semantics": {
+      "decision": "replay = 允许复用历史代码；agent = 必须走完整 Agent 重新生成",
+      "reason_code": "blocked:<blocker> 表示被硬约束否决；verify_failed:<signal> 表示中等置信度下严格校验未通过；low_confidence / high_confidence / verify_passed 为分数档位结论"
+    }
+  },
+  "cases": [
+    {
+      "id": "adv_001_same_metric_diff_dimension",
+      "kind": "相同指标，不同维度",
+      "pack": "retail_sales",
+      "question": "各地区的销售额是多少？",
+      "context": {"pack_ids": ["retail_sales"], "columns": ["订单日期", "品类", "区域", "销售额", "数量"], "extensions": ["csv"]},
+      "candidates": [
+        {"key": "sales_by_category", "name": "各品类销售额", "pack_id": "retail_sales",
+         "question": "各品类的销售额是多少？", "columns": ["订单日期", "品类", "销售额", "数量"],
+         "datasource_key": "retail_sales::csv", "use_count": 5, "success_count": 5}
+      ],
+      "expect": {"decision": "agent", "reason_code": "blocked:dimension_mismatch"}
+    },
+    {
+      "id": "adv_002_same_dimension_diff_metric",
+      "kind": "相同维度，不同指标",
+      "pack": "retail_sales",
+      "question": "各品类的订单量是多少？",
+      "context": {"pack_ids": ["retail_sales"], "columns": ["订单日期", "品类", "区域", "销售额", "数量"], "extensions": ["csv"]},
+      "candidates": [
+        {"key": "sales_by_category", "name": "各品类销售额", "pack_id": "retail_sales",
+         "question": "各品类的销售额是多少？", "columns": ["订单日期", "品类", "销售额", "数量"],
+         "datasource_key": "retail_sales::csv", "use_count": 5, "success_count": 5}
+      ],
+      "expect": {"decision": "agent", "reason_code": "blocked:metric_mismatch"}
+    },
+    {
+      "id": "adv_003_synonym_should_replay",
+      "kind": "同义词（地区=区域 / 营业额=销售额）——应当放行",
+      "pack": "retail_sales",
+      "question": "各地区的营业额是多少？",
+      "context": {"pack_ids": ["retail_sales"], "columns": ["订单日期", "品类", "区域", "销售额", "数量"], "extensions": ["csv"]},
+      "candidates": [
+        {"key": "sales_by_region", "name": "各区域销售额", "pack_id": "retail_sales",
+         "question": "各区域的销售额是多少？", "columns": ["订单日期", "区域", "销售额", "数量"],
+         "datasource_key": "retail_sales::csv", "use_count": 8, "success_count": 8}
+      ],
+      "expect": {"decision": "replay", "reason_code": "high_confidence"}
+    },
+    {
+      "id": "adv_004_ranking_direction_max",
+      "kind": "「最多」vs「最少」：排序方向相反",
+      "pack": "retail_sales",
+      "question": "销售额最高的门店是哪个？",
+      "context": {"pack_ids": ["retail_sales"], "columns": ["订单日期", "区域", "销售额", "数量"], "extensions": ["csv"]},
+      "candidates": [
+        {"key": "sales_by_store_asc", "name": "销售额最低的门店", "pack_id": "retail_sales",
+         "question": "销售额最低的门店是哪个？", "columns": ["订单日期", "区域", "销售额", "数量"],
+         "datasource_key": "retail_sales::csv", "use_count": 3, "success_count": 3}
+      ],
+      "expect": {"decision": "agent", "reason_code": "blocked:ranking_direction_mismatch"}
+    },
+    {
+      "id": "adv_005_ranking_topn_changed",
+      "kind": "TopN 变化：Top5 vs Top10",
+      "pack": "retail_sales",
+      "question": "销售额最高的5家门店",
+      "context": {"pack_ids": ["retail_sales"], "columns": ["订单日期", "区域", "销售额", "数量"], "extensions": ["csv"]},
+      "candidates": [
+        {"key": "sales_top10_store", "name": "销售额 Top10 门店", "pack_id": "retail_sales",
+         "question": "销售额最高的10家门店", "columns": ["订单日期", "区域", "销售额", "数量"],
+         "datasource_key": "retail_sales::csv", "use_count": 4, "success_count": 4}
+      ],
+      "expect": {"decision": "agent", "reason_code": "blocked:ranking_limit_mismatch"}
+    },
+    {
+      "id": "adv_006_time_window_changed",
+      "kind": "不同时间范围：近 30 天 vs 近 90 天",
+      "pack": "retail_sales",
+      "question": "近30天销售额的周趋势",
+      "context": {"pack_ids": ["retail_sales"], "columns": ["订单日期", "品类", "区域", "销售额", "数量"], "extensions": ["csv"]},
+      "candidates": [
+        {"key": "sales_trend_90d_week", "name": "近90天销售额周趋势", "pack_id": "retail_sales",
+         "question": "近90天销售额的周趋势", "columns": ["订单日期", "销售额", "数量"],
+         "datasource_key": "retail_sales::csv", "use_count": 6, "success_count": 6}
+      ],
+      "expect": {"decision": "agent", "reason_code": "blocked:time_window_mismatch"}
+    },
+    {
+      "id": "adv_007_time_grain_changed",
+      "kind": "粒度变化：日趋势 vs 周趋势（区间相同）",
+      "pack": "retail_sales",
+      "question": "近30天销售额的日趋势",
+      "context": {"pack_ids": ["retail_sales"], "columns": ["订单日期", "销售额", "数量"], "extensions": ["csv"]},
+      "candidates": [
+        {"key": "sales_trend_30d_week", "name": "近30天销售额周趋势", "pack_id": "retail_sales",
+         "question": "近30天销售额的周趋势", "columns": ["订单日期", "销售额", "数量"],
+         "datasource_key": "retail_sales::csv", "use_count": 6, "success_count": 6}
+      ],
+      "expect": {"decision": "agent", "reason_code": "blocked:time_window_mismatch"}
+    },
+    {
+      "id": "adv_008_type_changed_breakdown_vs_mom",
+      "kind": "相似自然语言，不同业务含义：拆解 vs 环比",
+      "pack": "retail_sales",
+      "question": "上月各品类的销售额环比变化",
+      "context": {"pack_ids": ["retail_sales"], "columns": ["订单日期", "品类", "销售额", "数量"], "extensions": ["csv"]},
+      "candidates": [
+        {"key": "sales_by_category", "name": "各品类销售额", "pack_id": "retail_sales",
+         "question": "各品类的销售额是多少？", "columns": ["订单日期", "品类", "销售额", "数量"],
+         "datasource_key": "retail_sales::csv", "use_count": 5, "success_count": 5}
+      ],
+      "expect": {"decision": "agent", "reason_code": "blocked:analysis_type_mismatch"}
+    },
+    {
+      "id": "adv_009_datasource_changed",
+      "kind": "不同数据源：Skill 沉淀自 xlsx，当前数据是 csv",
+      "pack": "retail_sales",
+      "question": "各品类的销售额是多少？",
+      "context": {"pack_ids": ["retail_sales"], "columns": ["订单日期", "品类", "区域", "销售额", "数量"], "extensions": ["csv"]},
+      "candidates": [
+        {"key": "sales_by_category_xlsx", "name": "各品类销售额（旧数据源）", "pack_id": "retail_sales",
+         "question": "各品类的销售额是多少？", "columns": ["订单日期", "品类", "销售额", "数量"],
+         "datasource_key": "retail_sales::xlsx", "use_count": 5, "success_count": 5}
+      ],
+      "expect": {"decision": "agent", "reason_code": "blocked:datasource_changed"}
+    },
+    {
+      "id": "adv_010_file_format_replaced",
+      "kind": "不同数据源：读取函数与文件类型不兼容",
+      "pack": "retail_sales",
+      "question": "各品类的销售额是多少？",
+      "context": {"pack_ids": ["retail_sales"], "columns": ["订单日期", "品类", "销售额", "数量"], "extensions": ["csv"]},
+      "candidates": [
+        {"key": "sales_by_category_excel_code", "name": "各品类销售额（Excel 读取）", "pack_id": "retail_sales",
+         "question": "各品类的销售额是多少？", "columns": ["订单日期", "品类", "销售额", "数量"],
+         "code": "import pandas as pd\ndf = pd.read_excel('/data/x.xlsx')\n",
+         "datasource_key": "retail_sales::xlsx", "use_count": 2, "success_count": 2}
+      ],
+      "expect": {"decision": "agent", "reason_code": "blocked:reader_mismatch"}
+    },
+    {
+      "id": "adv_011_column_missing",
+      "kind": "数据源变化：Skill 依赖的列已不存在",
+      "pack": "manufacturing_production",
+      "question": "各产线的停机时长是多少？",
+      "context": {"pack_ids": ["manufacturing_production"], "columns": ["生产日期", "产线", "产品", "实际产量", "不良数"], "extensions": ["csv"]},
+      "candidates": [
+        {"key": "downtime_by_line", "name": "各产线停机时长", "pack_id": "manufacturing_production",
+         "question": "各产线的停机时长是多少？", "columns": ["生产日期", "产线", "停机分钟"],
+         "datasource_key": "manufacturing_production::csv", "use_count": 3, "success_count": 3}
+      ],
+      "expect": {"decision": "agent", "reason_code": "blocked:column_missing"}
+    },
+    {
+      "id": "adv_012_cross_pack_similar",
+      "kind": "相似词面但语义包不同（跨包不得重放）",
+      "pack": "retail_sales",
+      "question": "各产线的实际产量是多少？",
+      "context": {"pack_ids": ["retail_sales"], "columns": ["订单日期", "品类", "区域", "销售额", "数量"], "extensions": ["csv"]},
+      "candidates": [
+        {"key": "output_by_line", "name": "各产线实际产量", "pack_id": "manufacturing_production",
+         "question": "各产线的实际产量是多少？", "columns": ["生产日期", "产线", "实际产量", "不良数"],
+         "datasource_key": "manufacturing_production::csv", "use_count": 7, "success_count": 7}
+      ],
+      "expect": {"decision": "agent", "reason_code": "blocked:pack_mismatch"}
+    },
+    {
+      "id": "adv_013_filter_changed",
+      "kind": "查询条件发生变化：用户多加了地区筛选",
+      "pack": "retail_sales",
+      "question": "华东地区各品类的销售额是多少？",
+      "context": {"pack_ids": ["retail_sales"], "columns": ["订单日期", "品类", "区域", "销售额", "数量"], "extensions": ["csv"]},
+      "candidates": [
+        {"key": "sales_by_category", "name": "各品类销售额", "pack_id": "retail_sales",
+         "question": "各品类的销售额是多少？", "columns": ["订单日期", "品类", "销售额", "数量"],
+         "datasource_key": "retail_sales::csv", "use_count": 5, "success_count": 5}
+      ],
+      "expect": {"decision": "agent", "reason_code": "blocked:dimension_partial"}
+    },
+    {
+      "id": "adv_014_no_metric_in_pack",
+      "kind": "库里没有对应分析路径（新指标）——应当放弃重放",
+      "pack": "retail_sales",
+      "question": "客户复购率是多少？",
+      "context": {"pack_ids": ["retail_sales"], "columns": ["订单日期", "品类", "区域", "销售额", "数量"], "extensions": ["csv"]},
+      "candidates": [
+        {"key": "sales_by_category", "name": "各品类销售额", "pack_id": "retail_sales",
+         "question": "各品类的销售额是多少？", "columns": ["订单日期", "品类", "销售额", "数量"],
+         "datasource_key": "retail_sales::csv", "use_count": 5, "success_count": 5}
+      ],
+      "expect": {"decision": "agent", "reason_code": "low_confidence"}
+    },
+    {
+      "id": "adv_015_similar_competition_pick_correct",
+      "kind": "相似 Skill 竞争：同指标同类型不同维度，应选中维度一致的那条",
+      "pack": "retail_sales",
+      "question": "各品类的销售额是多少？",
+      "context": {"pack_ids": ["retail_sales"], "columns": ["订单日期", "品类", "区域", "销售额", "数量"], "extensions": ["csv"]},
+      "candidates": [
+        {"key": "sales_by_category", "name": "各品类销售额", "pack_id": "retail_sales",
+         "question": "各品类的销售额是多少？", "columns": ["订单日期", "品类", "销售额", "数量"],
+         "datasource_key": "retail_sales::csv", "use_count": 5, "success_count": 5},
+        {"key": "sales_by_region", "name": "各区域销售额", "pack_id": "retail_sales",
+         "question": "各区域的销售额是多少？", "columns": ["订单日期", "区域", "销售额", "数量"],
+         "datasource_key": "retail_sales::csv", "use_count": 9, "success_count": 9}
+      ],
+      "expect": {"decision": "replay", "reason_code": "high_confidence", "selected_skill": "sales_by_category"}
+    },
+    {
+      "id": "adv_016_top1_wrong_top2_right",
+      "kind": "Top1 词面更像但语义不符，Top2 才是正确路径",
+      "pack": "manufacturing_production",
+      "question": "各产品的良率对比",
+      "context": {"pack_ids": ["manufacturing_production"], "columns": ["生产日期", "产线", "产品", "工序", "实际产量", "不良数"], "extensions": ["csv"]},
+      "candidates": [
+        {"key": "output_by_product", "name": "各产品实际产量", "pack_id": "manufacturing_production",
+         "question": "各产品的实际产量是多少？", "columns": ["生产日期", "产品", "实际产量"],
+         "datasource_key": "manufacturing_production::csv", "use_count": 4, "success_count": 4},
+        {"key": "yield_by_product", "name": "各产品良率", "pack_id": "manufacturing_production",
+         "question": "各产品的良率对比", "columns": ["生产日期", "产品", "实际产量", "不良数"],
+         "datasource_key": "manufacturing_production::csv", "use_count": 6, "success_count": 6}
+      ],
+      "expect": {"decision": "replay", "reason_code": "high_confidence", "selected_skill": "yield_by_product"}
+    },
+    {
+      "id": "adv_017_history_rate_breaks_tie",
+      "kind": "同义候选并列时，用历史成功率打破平局",
+      "pack": "retail_sales",
+      "question": "各渠道的销售额是多少？",
+      "context": {"pack_ids": ["retail_sales"], "columns": ["订单日期", "品类", "渠道", "销售额", "数量"], "extensions": ["csv"]},
+      "candidates": [
+        {"key": "sales_by_channel_flaky", "name": "各渠道销售额（旧）", "pack_id": "retail_sales",
+         "question": "各渠道的销售额是多少？", "columns": ["订单日期", "渠道", "销售额", "数量"],
+         "datasource_key": "retail_sales::csv", "use_count": 10, "success_count": 2},
+        {"key": "sales_by_channel", "name": "各渠道销售额", "pack_id": "retail_sales",
+         "question": "各渠道的销售额有多少？", "columns": ["订单日期", "渠道", "销售额", "数量"],
+         "datasource_key": "retail_sales::csv", "use_count": 8, "success_count": 8}
+      ],
+      "expect": {"decision": "replay", "reason_code": "high_confidence", "selected_skill": "sales_by_channel"}
+    },
+    {
+      "id": "adv_018_legacy_skill_without_fingerprint",
+      "kind": "旧 Skill 无数据源指纹（兼容性：回退到列结构 + 读取函数判断）",
+      "pack": "retail_sales",
+      "question": "各品类的销量是多少？",
+      "context": {"pack_ids": ["retail_sales"], "columns": ["订单日期", "品类", "销售额", "数量"], "extensions": ["csv"]},
+      "candidates": [
+        {"key": "qty_by_category_legacy", "name": "各品类销量", "pack_id": "retail_sales",
+         "question": "各品类的销量是多少？", "columns": ["订单日期", "品类", "数量"],
+         "datasource_key": null, "use_count": 2, "success_count": 2}
+      ],
+      "expect": {"decision": "replay", "reason_code": "high_confidence"}
+    },
+    {
+      "id": "adv_019_metric_partial",
+      "kind": "指标部分重叠：多要一个指标不得静默重放",
+      "pack": "manufacturing_production",
+      "question": "各产线的计划产量与实际产量分别是多少？",
+      "context": {"pack_ids": ["manufacturing_production"], "columns": ["生产日期", "产线", "计划产量", "实际产量", "不良数"], "extensions": ["csv"]},
+      "candidates": [
+        {"key": "output_by_line", "name": "各产线实际产量", "pack_id": "manufacturing_production",
+         "question": "各产线的实际产量是多少？", "columns": ["生产日期", "产线", "实际产量"],
+         "datasource_key": "manufacturing_production::csv", "use_count": 6, "success_count": 6}
+      ],
+      "expect": {"decision": "agent", "reason_code": "blocked:metric_partial"}
+    },
+    {
+      "id": "adv_020_same_question_same_intent_replays",
+      "kind": "完全相同的问题与数据范围——应当直接重放",
+      "pack": "manufacturing_production",
+      "question": "各产线的良率对比",
+      "context": {"pack_ids": ["manufacturing_production"], "columns": ["生产日期", "产线", "工序", "实际产量", "不良数"], "extensions": ["csv"]},
+      "candidates": [
+        {"key": "yield_by_line", "name": "各产线良率", "pack_id": "manufacturing_production",
+         "question": "各产线的良率对比", "columns": ["生产日期", "产线", "实际产量", "不良数"],
+         "datasource_key": "manufacturing_production::csv", "use_count": 7, "success_count": 7}
+      ],
+      "expect": {"decision": "replay", "reason_code": "high_confidence"}
+    }
+  ]
+}

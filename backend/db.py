@@ -86,3 +86,9 @@ def _migrate() -> None:
         if "workspace_id" not in dash_cols:
             conn.exec_driver_sql("ALTER TABLE dashboards ADD COLUMN workspace_id INTEGER")
             conn.commit()
+        # Skill 数据源指纹（feat/skill-retrieval-v2）：历史行保持 NULL = 未知，
+        # 检索层回退到列结构 + 读取函数兼容性判断，不因缺指纹而拒绝旧 Skill
+        sk_cols = {row[1] for row in conn.exec_driver_sql("PRAGMA table_info(skills)")}
+        if "datasource_key" not in sk_cols:
+            conn.exec_driver_sql("ALTER TABLE skills ADD COLUMN datasource_key TEXT")
+            conn.commit()

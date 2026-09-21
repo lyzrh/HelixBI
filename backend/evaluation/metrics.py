@@ -81,6 +81,15 @@ def _pct(value: float, digits: int = 1) -> str:
     return f"{value * 100:.{digits}f}%"
 
 
+def _signed(value: float, digits: int = 1) -> str:
+    return f"{value:+.{digits}f}"
+
+
+def _pp(value: float, digits: int = 1) -> str:
+    """比率差值 → 百分点（读报告的人关心的是 pp，不是小数）。"""
+    return f"{value * 100:+.{digits}f}pp"
+
+
 def _row(label: str, value: str, extra: str = "", indent: int = 0) -> str:
     prefix = "  " * indent
     tail = f"  {extra}" if extra else ""
@@ -142,18 +151,75 @@ def render_report(report: dict) -> str:
         lines.append(_row("口径注入完整率", "未采集", plan.get("reason", "")))
 
     sk = report.get("skills", {})
+    base_sk = report.get("baseline_skills", {})
     if sk.get("status", "ok") == "ok":
-        lines.append(_row("Skill 匹配 Top1 准确率", _pct(sk["top1_accuracy"]),
+        lines.append(_row("Skill 检索 Top1 准确率", _pct(sk["top1_accuracy"]),
                           f"{sk['queries']} 次查询 / {sk['groups']} 条路径"))
-        lines.append(_row(f"Skill 匹配 Recall@{sk.get('k', 2)}", _pct(sk["recall"]), ""))
+        lines.append(_row(f"Skill 检索 Recall@{sk.get('k', 3)}", _pct(sk["recall"]),
+                          f"Recall@2 {_pct(sk.get('recall_at_2', 0.0))}", indent=1))
         lines.append(_row("Skill 命中率", _pct(sk["hit_rate"]), "", indent=1))
+        if base_sk.get("status") == "ok":
+            lines.append(_row("└ 基线（V1 词面打分）Top1", _pct(base_sk["top1_accuracy"]),
+                              f"Δ {_pp(sk['top1_accuracy'] - base_sk['top1_accuracy'])}",
+                              indent=1))
     else:
         lines.append(_row("Skill 匹配", "未采集", sk.get("reason", "")))
 
     rp = report.get("replay", {})
     if rp.get("status", "ok") == "ok":
         lines.append(_row("重放准入判定正确率", _pct(rp["eligibility_rate"]),
-                          f"({rp['eligibility_hits']}/{rp['cases']})"))
+                          f"({rp['eligibility_hits']}/{rp['cases']})  结构守卫"))
+
+    ret = report.get("retrieval", {})
+    if ret.get("status") == "ok":
+        v1, v2 = ret["v1"], ret["v2"]
+        lines.append("-" * 66)
+        lines.append("Skill Retrieval V2（完整路径签名口径：包 / 指标 / 维度 / 类型 / 排序 / 时间窗）")
+        f1, f2 = v1["fine"], v2["fine"]
+        lines.append(_row("检索 Top1（重放口径）", _pct(f2["top1_accuracy"]),
+                          f"V1 {_pct(f1['top1_accuracy'])}  "
+                          f"Δ {_pp(f2['top1_accuracy'] - f1['top1_accuracy'])}"))
+        lines.append(_row("Recall@2", _pct(f2["recall_at_2"]),
+                          f"V1 {_pct(f1['recall_at_2'])}", indent=1))
+        lines.append(_row("重放 Precision", _pct(f2["replay_precision"]),
+                          f"V1 {_pct(f1['replay_precision'])}", indent=1))
+        lines.append(_row("重放 Recall", _pct(f2["replay_recall"]),
+                          f"V1 {_pct(f1['replay_recall'])}", indent=1))
+        lines.append(_row("False Replay Rate", _pct(f2["false_replay_rate"]),
+                          f"V1 {_pct(f1['false_replay_rate'])}  "
+                          f"({len(f1['false_replay_cases'])} → "
+                          f"{len(f2['false_replay_cases'])} 条)", indent=1))
+        a1, a2 = v1["admission"], v2["admission"]
+        lines.append(_row("准入判定正确率（对抗集）", _pct(a2["admission_accuracy"]),
+                          f"{a2['cases']} 条对抗样例 / V1 {_pct(a1['admission_accuracy'])}"))
+        lines.append(_row("└ 误放行 / 误拒绝",
+                          f"{a2['false_accept']} / {a2['false_reject']}",
+                          f"V1 {a1['false_accept']} / {a1['false_reject']}", indent=1))
+        lines.append(_row("└ 判定+原因一致性", _pct(a2["decision_and_reason_accuracy"]),
+                          "零 token、可解释", indent=1))
+        e1, e2 = v1["efficiency"], v2["efficiency"]
+        lines.append(_row("重放占比", _pct(e2["replay_share"]),
+                          f"V1 {_pct(e1['replay_share'])}  Agent 兜底 "
+                          f"{_pct(e2['agent_fallback_rate'])}"))
+        lines.append(_row("LLM 调用 / 查询", f"{e2['llm_calls_per_query']:.2f}",
+                          f"V1 {e1['llm_calls_per_query']:.2f}  "
+                          f"Δ {_signed(e2['llm_calls_per_query'] - e1['llm_calls_per_query'], 2)}",
+                          indent=1))
+        lines.append(_row("└ 计入误重放后", f"{e2['llm_calls_per_query_incl_misreplay']:.2f}",
+                          f"V1 {e1['llm_calls_per_query_incl_misreplay']:.2f}"
+                          "（V1 的低调用量来自错误重放）", indent=1))
+        lines.append(_row("平均 Token / 查询", f"{e2['avg_tokens_per_query']:.0f}",
+                          f"V1 {e1['avg_tokens_per_query']:.0f}", indent=1))
+        lines.append(_row("平均 LLM 延迟 / 查询",
+                          f"{e2['avg_latency_ms']:.0f} ms",
+                          f"V1 {e1['avg_latency_ms']:.0f} ms"
+                          f"  单次 Agent ~{e2['avg_latency_ms_per_agent_query']:.0f} ms",
+                          indent=1))
+        cost = e2["cost_usd_per_query"]
+        lines.append(_row("估算成本 / 查询",
+                          f"${cost:.6f}" if cost is not None else "未配置单价",
+                          f"画像来源 {e2['profile']['source']}", indent=1))
+        lines.append(_row("└ 沙箱耗时", "未采集", "需 Docker 实测，不编造数字", indent=1))
 
     lines.append("-" * 66)
     lines.append("以下阶段需要 Docker 沙箱 / LLM，资源缺失时显示「未采集」而非编造数字：")

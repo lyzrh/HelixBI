@@ -63,7 +63,7 @@ can always connect your own data.
 | **Conversational Analysis** | Ask in natural language; SSE streams step progress / code / terminal / charts / tables / conclusions; "confirm query first" mode lets you edit the QuerySpec before execution; automatic failure repair with retries (up to 3); one-click suggested follow-ups |
 | **Self-Service Analytics** | Click / drag fields for instant charts (ECharts interactive rendering, fully local — zero tokens); switch freely among bar / line / pie / area / scatter / stacked charts; adjustable aggregation and sorting |
 | **Scenario Agents** | Pre-built industry experts for retail sales and manufacturing production: bound semantic packs and datasources, opening messages, suggested questions, start/stop management — ready to chat out of the box |
-| **Skill Library** | Verified analysis paths are automatically captured as reusable Skills; similar questions replay stored code instantly (sub-second); when column schemas change, skills serve as few-shot references for regeneration; `global / workspace / user` scopes prevent cross-workspace leakage; usage / success-rate statistics |
+| **Skill Library** | Verified analysis paths are automatically captured as reusable Skills; **retrieval V2** scores candidates with 8 explainable signals and gates replay on metrics / dimensions / analysis type / sort direction / Top-N / time window / datasource fingerprint — a hit replays in sub-seconds with **zero LLM calls**, a miss or a failed replay safely returns to the full Agent; `global / workspace / user` scopes prevent cross-workspace leakage; usage / success-rate statistics |
 | **Active Insights** | Scheduled scans across all datasources: metric jumps / sustained trends / outliers / top-share shifts / threshold breaches (partial months auto-excluded to avoid false alarms); new alerts get automatic LLM diagnosis (phenomenon → evidence → cause → recommendation); overview stat cards + status workflow |
 | **Dashboards** | Pin charts / tables / conclusions from conversations and insight diagnoses in one click; grid-layout browsing; export to self-contained HTML reports |
 | **Datasources** | CSV / Excel / Parquet upload; MySQL / PostgreSQL / SQLite connections (test before saving); **datasources belong to a workspace** — invisible to and unusable by other workspaces; DB tables materialized to parquet cache before entering the sandbox; data preview + **read-only SQL query** (executed on local sqlite — zero tokens) |
@@ -152,18 +152,55 @@ Semantic resolution accuracy (lenient)  93.8%   (61/65)
 Context-injection completeness          96.6%   (113/117 definitions)
   Rendered fidelity of resolved defs    100.0%  (113/113)
   Derived-formula injection             100.0%  (19/19)
-Skill matching Top1 accuracy            72.3%   (65 queries / 33 captured paths)
-Skill matching Recall@2                 86.2%
-Replay-admission correctness            100.0%  (65/65)
+Skill retrieval Top1 accuracy          78.5%   (65 queries / 33 captured paths; baseline 72.3%)
+Skill retrieval Recall@3                90.8%   Recall@2 89.2%
+Replay-admission correctness            100.0%  (65/65)  structural guard only
+Skill Retrieval V2 (full path-signature grain: pack / metrics / dimensions / type /
+                   ranking / time window)
+  Retrieval Top1                       100.0%  (baseline 95.4%)
+  Replay Precision / Recall            100.0% / 96.9%
+  False Replay Rate                    0.0%    (baseline 4.6% — 3 cases → 0)
+  Admission accuracy (adversarial)     100.0%  (20 cases; baseline 50.0%, false accepts 10 → 0)
+  LLM calls / query                    0.09    (0.09 counting mis-replays; baseline 0.14)
 Execution / self-repair / end-to-end    needs the Docker sandbox; "not collected"
                                         when unavailable
 ```
 
-The evaluation is not decoration — it has already driven two real fixes: the colloquial
+The evaluation is not decoration — it has already driven three real fixes: the colloquial
 adversarial subset (60%) exposed missing synonyms ("地区") and ranking words ("最长") in
 the packs; after fixing, standard phrasing reached 100%. Adding the semantic-resolution
-skeleton to skill matching lifted Top1 from 64.6% to 72.3% and Recall@2 from 76.9% to
-86.2%. Metric thresholds also gate pytest (`tests/evaluation/`).
+skeleton to skill matching lifted Top1 from 64.6% to 72.3%, and Skill Retrieval V2 raised it
+to 78.5% while driving false replays from 4.6% to 0. Metric thresholds also gate pytest
+(`tests/evaluation/`) and CI.
+
+### Skill Retrieval V2 / Replay Admission
+
+Before this change a Skill was only a few-shot reference inside the analysis path (real
+replay existed solely behind "run this Skill manually"), and the replay guard only checked
+column subsets plus the pandas reader — so a Skill with **different metrics, dimensions,
+sort direction or time window would still be replayed**, returning a "looks right, wrong
+definition" answer. V2 turns this into an evaluable, explainable and safe retrieval +
+admission system:
+
+```
+Query → Semantic Resolution → Candidate Retrieval → Top-K scoring (8 explainable signals)
+      → Replay Admission (hard blockers + High/Medium/Low tiers) → Replay (0 LLM calls) or full Agent
+```
+
+- **Rather give up a replay than replay wrongly**: any mismatch in metrics / dimensions /
+  analysis type / sort direction / Top-N / time window / datasource fingerprint / columns /
+  reader sends the query to the Agent, and the exact reason is written to the trace;
+- **No extra LLM calls**: every signal comes from deterministic semantic resolution and Skill
+  metadata; weights live in `backend/config.py` and are calibrated with
+  `--tune-weights --sensitivity` against the eval set;
+- **Safe fallback**: a failed replay automatically falls back to the full Agent instead of
+  returning an error;
+- **Answers "why"**: `Run.trace.skill.retrieval` records candidates, per-signal scores, the
+  admission verdict, rejection reason and fallback reason.
+
+Full baseline-vs-V2 table, weight calibration and open issues:
+[`docs/skill-retrieval-v2.md`](docs/skill-retrieval-v2.md)
+(reproduce with `python -m backend.evaluation --benchmark`).
 
 ## Observability
 
@@ -171,6 +208,9 @@ Every run (including skill replays) persists a `Run.trace`:
 
 - **Per-stage latencies**: intent → semantic resolution → skill matching → codegen → sandbox execution → summary
 - **LLM usage**: call count (by node), input / output tokens, cost — always 0 for skill replays
+- **Skill retrieval record**: candidate Skills with their 8 signal scores, the selected Skill,
+  the admission verdict plus rejection reason, and whether it replayed or fell back to the
+  Agent — "why was this not replayed / why was this Skill chosen" is answerable from the trace
 - **Result acceptance**: execution ok / has artifacts / answer present / chart files really exist / well-formed tables / clean stderr — six checks decoupled from the boolean `ok`
 - **Actor**: the user / workspace / role behind the run, for per-person and per-workspace auditing
 - **Failures leave traces too**: failed runs write the same trace — that's the round you most want to inspect
@@ -201,7 +241,7 @@ logic lives in the domain modules.
 │  agent/      Agent core: graph (LangGraph) + sandbox client   │
 │  analysis/   Analysis Runtime (driving + persistence) +       │
 │              self-service analytics (zero tokens)             │
-│  skills/     Skill capture / match / replay / few-shot        │
+│  skills/     Skill capture / retrieval / replay / few-shot    │
 │  insights/   rule scans + scheduler + LLM diagnosis           │
 │  datasource/ files + DB connections + parquet cache           │
 │  semantic/   semantic-pack runtime (reads semantic_packs/)    │
@@ -320,7 +360,7 @@ backend/                # FastAPI service (organised by business domain)
                         #   (UserContext + permission_checker), deps (sign-in / permission gates)
   agent/                # Agent core: graph prompts profiler sandbox
   analysis/             # Analysis Runtime (runtime) + self-service (explore)
-  skills/               # Skill capture / match / replay (with scope isolation)
+  skills/               # Skill capture / retrieval (score+admit) / replay (scope-isolated)
   insights/             # rule scans (engine) + scheduler
   datasource/           # file / DB access + parquet materialization
   semantic/             # semantic-pack runtime (registry + render + resolver)

@@ -7,7 +7,7 @@
   - `backend/auth/`：认证与 RBAC（`security.py` 口令哈希 + JWT、`context.py` UserContext 解析 + `permission_checker`、`deps.py` `get_current_context` / `require_permission`）。
   - `backend/agent/`：Agent 内核与沙箱客户端（`graph.py` / `prompts.py` / `profiler.py` / `sandbox.py`）。
   - `backend/analysis/`：`runtime.py` 对话式分析运行器（SSE 流式 + 落库）；`explore.py` 自助分析（本地 pandas / 只读 SQL，零 token）。
-  - `backend/skills/`：`engine.py` Skill 捕获 / 匹配 / 重放 / few-shot。
+  - `backend/skills/`：`engine.py` Skill 捕获 / 重放执行 / few-shot / 失败兜底；`retrieval.py` **检索与重放准入**（候选召回 → 8 路可解释打分 → blocker + 分层准入，零 token、纯确定性，权重在 `config.SKILL_RETRIEVAL_WEIGHTS`）。
   - `backend/insights/`：`engine.py` 规则扫描 + LLM 诊断，`scheduler.py` 定时任务。
   - `backend/datasource/`：`service.py` 文件 / 数据库接入、预览、parquet 物化。
   - `backend/semantic/`：语义包运行时（`registry.py` 加载检索 + `render.py` 渲染 prompt）。
@@ -47,3 +47,8 @@ pytest -q
 改动认证 / 权限 / 工作区隔离时，额外跑 `pytest tests/test_auth_rbac.py -q` 并补对应 Case。
 
 改了语义解析 / Skill 匹配 / 沙箱链路等影响指标的行为时，额外跑 `python -m backend.evaluation` 看 Evaluation Report（见 `.agents/rules/architecture.md` 的指标门禁条目）。
+
+改了 Skill 检索 / 重放准入后，还要跑 `python -m backend.evaluation --benchmark`：False Replay 必须仍为 0，
+Replay Precision 不得低于基线（`tests/evaluation/test_retrieval_gate.py` 会拦住回归）。
+新增准入约束时同时补一条对抗样例到 `backend/evaluation/datasets/admission/`，
+否则这类误重放没有回归保护。

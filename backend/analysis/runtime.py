@@ -37,12 +37,15 @@ def run_analysis_stream(
     on_event=None,
     skill_ids: list[int] | None = None,
     user_context: dict | None = None,
+    retrieval: dict | None = None,
 ) -> dict:
     """在工作线程中执行完整分析流，返回最终落库结果摘要。
 
     全过程记入 `Run.trace`（分阶段耗时 / LLM 调用与 token / 口径解析 / 校验结论）。
     **失败同样留痕**——排查问题时，失败的那一轮往往才是最需要看的。
     user_context：可信后端解析的 UserContext 字典（可为空 = 匿名旧链路）。
+    retrieval：Skill 检索 + 重放准入结论（写进 trace.skill.retrieval，
+    用于回答「为什么这次没重放、为什么落到 Agent」）。
     """
     t0 = time.time()
     emit = on_event or (lambda *_: None)
@@ -62,7 +65,7 @@ def run_analysis_stream(
                                semantic_block, skill_block, emit, session_id=session_id,
                                user_context=user_context)
         trace = _build_trace(run_pk, question, t0, stages, final, semantic_meta,
-                             skill_block, skill_ids, user_context)
+                             skill_block, skill_ids, user_context, retrieval)
         with SessionLocal() as db:
             summary = _persist_result(db, run_pk, session_id, question, data_source_ids,
                                       final, int((time.time() - t0) * 1000), trace)
@@ -292,13 +295,28 @@ def _persist_result(db, run_pk, session_id, question, data_source_ids,
 # ---- 可观测性 ----
 
 def _build_trace(run_pk, question, t0, stages, final, semantic_meta,
-                 skill_block, skill_ids) -> dict:
+                 skill_block, skill_ids, user_context=None, retrieval=None) -> dict:
     """组装单次运行的可观测记录（写进 Run.trace，前端时间线与评估共用同一份）。"""
     execution = final.get("execution") or {}
     attempts = final.get("attempts", 0) or 0
     packs = list((semantic_meta or {}).get("packs") or [])
     resolved = resolve(question, packs[0]) if packs else {}
     validation = validate_final(final)
+
+    skill_trace = {
+        "matched_ids": list(skill_ids or []),
+        "hit": bool(skill_block),
+        "mode": "few_shot" if skill_block else "fresh",
+    }
+    if retrieval is not None:
+        skill_trace["retrieval"] = retrieval
+    if user_context:
+        # 触发者身份（谁发起的分析）——审计与排障用，与权限判定分离
+        skill_trace["actor"] = {
+            "user_id": user_context.get("user_id"),
+            "workspace_id": user_context.get("workspace_id"),
+            "role": user_context.get("role"),
+        }
 
     return {
         "run_id": run_pk,
@@ -316,11 +334,7 @@ def _build_trace(run_pk, question, t0, stages, final, semantic_meta,
             "analysis_type": resolved.get("analysis_type", "unknown"),
             "resolver_confidence": resolved.get("confidence", 0.0),
         },
-        "skill": {
-            "matched_ids": list(skill_ids or []),
-            "hit": bool(skill_block),
-            "mode": "few_shot" if skill_block else "fresh",
-        },
+        "skill": skill_trace,
         "execution": {
             "ok": bool(execution.get("ok")),
             "attempts": attempts,

@@ -30,42 +30,12 @@ def _sse_frame(event: str, data: dict) -> str:
     return f"event: {event}\ndata: {json.dumps(data, ensure_ascii=False)}\n\n"
 
 
-@router.post("/sessions/{sid}/analyze")
-async def analyze(sid: int, body: AnalyzeBody, db: Session = Depends(get_db),
-                  ctx: UserContext = Depends(require_permission("analysis:execute"))):
-    session = db.get(DbSession, sid)
-    if not session:
-        raise HTTPException(404, "会话不存在")
-    if session.workspace_id not in (ctx.workspace_id, None):
-        raise HTTPException(403, "会话不属于当前工作区")
-    if not body.data_source_ids:
-        raise HTTPException(400, "请至少选择一个数据源")
+async def sse_stream(work) -> StreamingResponse:
+    """把「在线程池里跑的阻塞任务」桥接成 SSE 响应。
 
-    if _semaphore.locked():
-        raise HTTPException(429, "已有分析任务在执行中，请稍候再试")
-    await _semaphore.acquire()
-
-    # 请求作用域内：匹配已启用 Skill（few-shot 注入）+ 落 user message + running run
-    from backend.skills import engine as skill_engine
-    skills = skill_engine.match_skills(db, body.question,
-                                       workspace_id=ctx.workspace_id,
-                                       user_id=ctx.user_id)
-    skill_block = skill_engine.render_skill_prompt(skills)
-
-    user_msg = Message(session_id=sid, role="user", content=body.question)
-    db.add(user_msg)
-    db.flush()
-    if session.title == "新会话" or not session.title:
-        session.title = body.question[:30]
-    run = Run(session_id=sid, question=body.question,
-              data_source_ids=jdump(body.data_source_ids),
-              status="running", spec=jdump(body.spec or {}),
-              skill_id=skills[0].id if skills else None)
-    db.add(run)
-    db.flush()
-    run_pk = run.id
-    db.commit()
-
+    `work` 是一个接受 `on_event(event, data)` 的可调用对象。
+    调用方必须先持有 `_semaphore`（本函数在流结束时负责释放）。
+    """
     loop = asyncio.get_running_loop()
     queue: asyncio.Queue = asyncio.Queue()
 
@@ -74,14 +44,7 @@ async def analyze(sid: int, body: AnalyzeBody, db: Session = Depends(get_db),
 
     async def worker():
         try:
-            await loop.run_in_executor(
-                None,
-                lambda: analysis_runner.run_analysis_stream(
-                    run_pk, sid, body.question, body.data_source_ids,
-                    body.spec, skill_block, body.agent_id, on_event,
-                    skill_ids=[s.id for s in skills],
-                ),
-            )
+            await loop.run_in_executor(None, lambda: work(on_event))
         finally:
             loop.call_soon_threadsafe(queue.put_nowait, (None, None))
 
@@ -99,6 +62,73 @@ async def analyze(sid: int, body: AnalyzeBody, db: Session = Depends(get_db),
                 await task
 
     return StreamingResponse(gen(), media_type="text/event-stream", headers=SSE_HEADERS)
+
+
+@router.post("/sessions/{sid}/analyze")
+async def analyze(sid: int, body: AnalyzeBody, db: Session = Depends(get_db),
+                  ctx: UserContext = Depends(require_permission("analysis:execute"))):
+    session = db.get(DbSession, sid)
+    if not session:
+        raise HTTPException(404, "会话不存在")
+    if session.workspace_id not in (ctx.workspace_id, None):
+        raise HTTPException(403, "会话不属于当前工作区")
+    if not body.data_source_ids:
+        raise HTTPException(400, "请至少选择一个数据源")
+
+    if _semaphore.locked():
+        raise HTTPException(429, "已有分析任务在执行中，请稍候再试")
+    await _semaphore.acquire()
+
+    # 请求作用域内完成 Skill 路由：Retrieval（召回）→ Admission（准入）→ 重放 or Agent
+    from backend.skills import engine as skill_engine
+
+    decision = skill_engine.route_query(
+        db, body.question, data_source_ids=body.data_source_ids,
+        workspace_id=ctx.workspace_id, user_id=ctx.user_id)
+    skills = skill_engine.match_skills(db, body.question,
+                                       workspace_id=ctx.workspace_id,
+                                       user_id=ctx.user_id)
+    skill_block = skill_engine.render_skill_prompt(skills)
+    # 会话标题在两条路径上都要更新（重放路径不经过下面的 Run 创建逻辑）
+    if session.title == "新会话" or not session.title:
+        session.title = body.question[:30]
+
+    if decision.replay:
+        # 高置信度 → 直接重放已验证代码（0 次 LLM 生成）；重放失败会在引擎内
+        # 自动 fallback 到完整 Agent，而不是把错误抛给用户。
+        # 标题在这里显式落库：重放路径不再经过下面的 Run 创建 + commit。
+        db.commit()
+        skill_pk = decision.selected_skill_id
+
+        def work(on_event):
+            return skill_engine.run_skill(
+                skill_pk, sid, list(body.data_source_ids), on_event,
+                workspace_id=ctx.workspace_id, question=body.question,
+                decision=decision)
+
+        return await sse_stream(work)
+
+    user_msg = Message(session_id=sid, role="user", content=body.question)
+    db.add(user_msg)
+    db.flush()
+    run = Run(session_id=sid, question=body.question,
+              data_source_ids=jdump(body.data_source_ids),
+              status="running", spec=jdump(body.spec or {}),
+              skill_id=skills[0].id if skills else None)
+    db.add(run)
+    db.flush()
+    run_pk = run.id
+    db.commit()
+
+    def work(on_event):
+        return analysis_runner.run_analysis_stream(
+            run_pk, sid, body.question, list(body.data_source_ids),
+            body.spec, skill_block, body.agent_id, on_event,
+            skill_ids=[s.id for s in skills],
+            retrieval=decision.to_dict(),
+        )
+
+    return await sse_stream(work)
 
 
 @router.post("/sessions/{sid}/parse")
@@ -210,36 +240,11 @@ async def rerun(rid: int, db: Session = Depends(get_db),
     data_source_ids = jload(run.data_source_ids, [])
     spec = jload(run.spec)
 
-    loop = asyncio.get_running_loop()
-    queue: asyncio.Queue = asyncio.Queue()
+    def work(on_event):
+        return analysis_runner.run_analysis_stream(
+            run_pk, run.session_id, run.question, data_source_ids,
+            spec, "", None, on_event,
+            user_context=ctx.to_dict(),
+        )
 
-    def on_event(event: str, data: dict):
-        loop.call_soon_threadsafe(queue.put_nowait, (event, data))
-
-    async def worker():
-        try:
-            await loop.run_in_executor(
-                None,
-                lambda: analysis_runner.run_analysis_stream(
-                    run_pk, run.session_id, run.question, data_source_ids,
-                    spec, "", None, on_event,
-                    user_context=ctx.to_dict(),
-                ),
-            )
-        finally:
-            loop.call_soon_threadsafe(queue.put_nowait, (None, None))
-
-    async def gen():
-        task = asyncio.create_task(worker())
-        try:
-            while True:
-                event, data = await queue.get()
-                if event is None:
-                    break
-                yield _sse_frame(event, data)
-        finally:
-            _semaphore.release()
-            if not task.done():
-                await task
-
-    return StreamingResponse(gen(), media_type="text/event-stream", headers=SSE_HEADERS)
+    return await sse_stream(work)

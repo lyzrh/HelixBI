@@ -92,6 +92,31 @@ def _match_terms(question: str, index: list[tuple[str, str, dict]]) -> list[tupl
 # ---- 各维度解析 ----
 
 def _resolve_time(question: str) -> dict:
+    """时间窗 =（区间, 粒度）。
+
+    「区间」与「粒度」是两个独立概念：「近 90 天」是区间，「周趋势」是粒度。
+    分开标注的原因是 Skill 重放——代码里的窗口与粒度都是写死的，
+    「近 90 天的周趋势」与「近 30 天的日趋势」不能互相重放。
+    """
+    result = _resolve_range(question)
+    grain_word = _match_grain_word(question)
+    if result:
+        result["grain"] = grain_word or result.get("grain")
+        return result
+    if grain_word:
+        return {"kind": "grain", "value": None, "unit": grain_word,
+                "text": grain_word, "grain": grain_word}
+    return {}
+
+
+def _match_grain_word(question: str) -> str | None:
+    for grain, words in _GRAIN_WORDS:
+        if any(w in question for w in words):
+            return grain
+    return None
+
+
+def _resolve_range(question: str) -> dict:
     for pattern, unit in _RANGE_PATTERNS:
         m = pattern.search(question)
         if m:
@@ -109,10 +134,6 @@ def _resolve_time(question: str) -> dict:
     if m:
         return {"kind": "year", "value": m.group(1), "unit": "year",
                 "text": m.group(0), "grain": "year"}
-    for grain, words in _GRAIN_WORDS:
-        for w in words:
-            if w in question:
-                return {"kind": "grain", "value": None, "unit": grain, "text": w, "grain": grain}
     return {}
 
 
@@ -130,9 +151,15 @@ def _resolve_ranking(question: str) -> dict | None:
     if m:
         top_n = int(m.group(1))
     else:
-        m2 = re.search(r"前([一二两三四五六七八九十]+)", question)
+        # 「销售额最高的 5 家门店」这类中文 T+数字 表达：最高/最低 与数字之间允许夹字，
+        # 但夹的字数要短，避免把「最高的门店，共 12 家」误判成 Top12。
+        m2 = re.search(r"最[高低多少大小好坏长短快慢][^\d]{0,4}(\d+)", question)
         if m2:
-            top_n = _CN_NUM.get(m2.group(1)[0], None)
+            top_n = int(m2.group(1))
+        else:
+            m3 = re.search(r"前([一二两三四五六七八九十]+)", question)
+            if m3:
+                top_n = _CN_NUM.get(m3.group(1)[0], None)
     lowered = question.lower()
     if any(w in question for w in _RANK_DESC_WORDS) or "top" in lowered:
         order = "desc"

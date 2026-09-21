@@ -1,17 +1,15 @@
 """Skill 路由：CRUD + 从运行沉淀 + SSE 运行。"""
 
-import asyncio
 import json
 
 from fastapi import APIRouter, Depends, HTTPException
-from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
 
 from backend.auth.context import UserContext
 from backend.auth.deps import get_current_context, require_permission
 from backend.db import get_db
 from backend.models import Skill
-from backend.routers.analysis import SSE_HEADERS, _semaphore, _sse_frame
+from backend.routers.analysis import _semaphore, sse_stream
 from backend.schemas import SkillCreate, SkillFromRun, SkillPatch, SkillRunBody
 from backend.skills import engine as skill_engine
 
@@ -102,45 +100,25 @@ def delete_skill(skid: int, db: Session = Depends(get_db),
 @router.post("/{skid}/run")
 async def run_skill(skid: int, body: SkillRunBody, db: Session = Depends(get_db),
                     _ctx: UserContext = Depends(require_permission("analysis:execute"))):
+    """手动运行 Skill（用户显式指定，不再走准入筛选，但结构守卫仍然生效）。"""
     s = db.get(Skill, skid)
     if not s:
         raise HTTPException(404, "Skill 不存在")
     if not s.enabled:
         raise HTTPException(400, "Skill 已停用")
+    # 作用域门：跨工作区的 Skill 不允许运行（与检索层同一套可见性规则）
+    if not (_ctx.workspace_id is None or s.scope == "global"
+            or s.workspace_id in (_ctx.workspace_id, None)):
+        raise HTTPException(403, "Skill 不属于当前工作区")
 
     if _semaphore.locked():
         raise HTTPException(429, "已有分析任务在执行中，请稍候再试")
     await _semaphore.acquire()
 
-    loop = asyncio.get_running_loop()
-    queue: asyncio.Queue = asyncio.Queue()
+    def work(on_event):
+        return skill_engine.run_skill(
+            skid, body.session_id, body.data_source_ids, on_event,
+            workspace_id=_ctx.workspace_id,
+        )
 
-    def on_event(event: str, data: dict):
-        loop.call_soon_threadsafe(queue.put_nowait, (event, data))
-
-    async def worker():
-        try:
-            await loop.run_in_executor(
-                None,
-                lambda: skill_engine.run_skill(
-                    skid, body.session_id, body.data_source_ids, on_event,
-                    workspace_id=_ctx.workspace_id,
-                ),
-            )
-        finally:
-            loop.call_soon_threadsafe(queue.put_nowait, (None, None))
-
-    async def gen():
-        task = asyncio.create_task(worker())
-        try:
-            while True:
-                event, data = await queue.get()
-                if event is None:
-                    break
-                yield _sse_frame(event, data)
-        finally:
-            _semaphore.release()
-            if not task.done():
-                await task
-
-    return StreamingResponse(gen(), media_type="text/event-stream", headers=SSE_HEADERS)
+    return await sse_stream(work)

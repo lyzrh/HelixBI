@@ -53,6 +53,48 @@ MATERIALIZED_TTL_HOURS = int(os.getenv("MATERIALIZED_TTL_HOURS", "24"))
 # 上传文件大小上限（MB）
 MAX_UPLOAD_MB = int(os.getenv("MAX_UPLOAD_MB", "200"))
 
+# ---- Skill Retrieval / Replay Admission（第二阶段检索与重放准入）----
+#
+# 全部集中在此，便于评测标定与线上调参；`backend/skills/retrieval.py` 只读取这些值，
+# 不把权重写进业务代码。
+#
+# 权重来自 `python -m backend.evaluation --tune-weights` 在固定问题集上的
+# 坐标下降标定（目标：先保 False Replay = 0，再最大化 Top1 / Replay Recall）。
+# 标定过程与候选权重详见 docs/skill-retrieval-v2.md。
+
+SKILL_RETRIEVAL_TOP_K = int(os.getenv("SKILL_RETRIEVAL_TOP_K", "5"))
+# few-shot 注入的相关性下限：低于该加权分的候选**不进 prompt**。
+# 注意它不作用于召回本身（召回要广），也不作用于重放准入（准入用 SKILL_ADMISSION_LOW）。
+SKILL_RETRIEVAL_MIN_SCORE = float(os.getenv("SKILL_RETRIEVAL_MIN_SCORE", "0.10"))
+
+# 打分权重（会自动归一化）：可解释的线性加权，不用黑盒模型
+#
+# 比最初设想多出 `ranking` / `time` 两路信号，理由是评测数据逼出来的：
+# 「销售额最高的门店」与「销售额最低的门店」在词面/指标/维度上完全一致，
+# 「近 30 天趋势」与「近 90 天趋势」也完全一致——但代码里的 sort 方向与
+# 时间窗口是写死的，仅靠 metric/dimension/type 无法拦住这两类误重放。
+SKILL_RETRIEVAL_WEIGHTS = {
+    "semantic": float(os.getenv("SKILL_W_SEMANTIC", "0.28")),
+    "metric": float(os.getenv("SKILL_W_METRIC", "0.24")),
+    "dimension": float(os.getenv("SKILL_W_DIMENSION", "0.17")),
+    "type": float(os.getenv("SKILL_W_TYPE", "0.13")),
+    "ranking": float(os.getenv("SKILL_W_RANKING", "0.06")),
+    "time": float(os.getenv("SKILL_W_TIME", "0.05")),
+    "datasource": float(os.getenv("SKILL_W_DATASOURCE", "0.04")),
+    "history": float(os.getenv("SKILL_W_HISTORY", "0.03")),
+}
+
+# 准入阈值：>= HIGH 直接重放；[LOW, HIGH) 进入严格校验；< LOW 放弃重放
+SKILL_ADMISSION_HIGH = float(os.getenv("SKILL_ADMISSION_HIGH", "0.72"))
+SKILL_ADMISSION_LOW = float(os.getenv("SKILL_ADMISSION_LOW", "0.50"))
+# Top1 与 Top2 的最小分差：低于该值视为「候选歧义」，不得直接重放
+SKILL_ADMISSION_MARGIN = float(os.getenv("SKILL_ADMISSION_MARGIN", "0.03"))
+
+# ---- LLM 计价（仅用于评估的成本估算；未配置则报告里显示「未配置单价」）----
+# 默认 0 表示「不假设价格」——避免用编造的单价算出好看的美元数字。
+LLM_PRICE_INPUT_PER_MTOK = float(os.getenv("LLM_PRICE_INPUT_PER_MTOK", "0"))
+LLM_PRICE_OUTPUT_PER_MTOK = float(os.getenv("LLM_PRICE_OUTPUT_PER_MTOK", "0"))
+
 
 def update_llm_config(base_url: str | None = None, api_key: str | None = None,
                       model: str | None = None) -> None:
@@ -86,9 +128,12 @@ RUNS_DIR.mkdir(parents=True, exist_ok=True)
 
 __all__ = [
     "CODE_TIMEOUT_SECONDS", "DATA_DIR", "DB_PATH", "ENV_PATH", "FRONTEND_DIST",
+    "LLM_PRICE_INPUT_PER_MTOK", "LLM_PRICE_OUTPUT_PER_MTOK",
     "LLM_TEMPERATURE", "MATERIALIZED_DIR", "MATERIALIZED_MAX_ROWS",
     "MATERIALIZED_TTL_HOURS", "MAX_FIX_ATTEMPTS", "MAX_UPLOAD_MB", "MODEL_NAME",
     "OPENAI_API_KEY", "OPENAI_BASE_URL", "PROJECT_ROOT", "RUNS_DIR",
     "SANDBOX_CPUS", "SANDBOX_IMAGE", "SANDBOX_MEMORY", "SEMANTIC_PACKS_DIR",
+    "SKILL_ADMISSION_HIGH", "SKILL_ADMISSION_LOW", "SKILL_ADMISSION_MARGIN",
+    "SKILL_RETRIEVAL_MIN_SCORE", "SKILL_RETRIEVAL_TOP_K", "SKILL_RETRIEVAL_WEIGHTS",
     "UPLOADS_DIR", "update_llm_config",
 ]

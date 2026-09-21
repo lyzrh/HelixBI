@@ -1,6 +1,17 @@
 # -*- coding: utf-8 -*-
-"""HelixBI 综合（接口 + 安全）测试脚本：对运行中的服务执行黑盒用例矩阵，输出紧凑结果表。"""
+"""HelixBI 综合（接口 + 安全）测试脚本：对运行中的服务执行黑盒用例矩阵，输出紧凑结果表。
+
+用法：
+    python -m uvicorn backend.main:app --port 8000     # 另开一个终端
+    python scripts/live_api_test.py
+
+目标地址可用环境变量覆盖（便于对临时库 / 其他端口做冒烟）：
+    HELIX_BASE_URL=http://127.0.0.1:8010 python scripts/live_api_test.py
+
+注意：脚本会在目标库注册 `tst_*` 测试账号，请对独立库运行（不要对生产库跑）。
+"""
 import json
+import os
 import urllib.request
 import urllib.error
 import concurrent.futures
@@ -8,7 +19,7 @@ import time
 import statistics
 import sys
 
-BASE = "http://127.0.0.1:8000"
+BASE = os.getenv("HELIX_BASE_URL", "http://127.0.0.1:8000").rstrip("/")
 results = []  # (编号, 分组, 用例, 期望, 实际, 结论)
 
 def req(method, path, token=None, ws=None, body=None, raw_headers=None):

@@ -176,6 +176,9 @@ class Skill(Base):
     columns_json: Mapped[str] = mapped_column(Text, default="[]")
     source_run_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
     tags: Mapped[str] = mapped_column(Text, default="[]")
+    # 沉淀时的数据源指纹（语义包::文件类型）——数据源整体更换后不得盲目重放。
+    # 历史 Skill 为 NULL，检索层回退到「列结构 + 读取函数」兼容性判断（保持兼容）。
+    datasource_key: Mapped[str | None] = mapped_column(String(120), nullable=True)
     use_count: Mapped[int] = mapped_column(Integer, default=0)
     success_count: Mapped[int] = mapped_column(Integer, default=0)
     enabled: Mapped[bool] = mapped_column(Boolean, default=True)
@@ -193,6 +196,7 @@ class Skill(Base):
             "pack_id": self.pack_id, "question": self.question, "spec": jload(self.spec),
             "code": self.code, "columns": jload(self.columns_json, []),
             "source_run_id": self.source_run_id, "tags": jload(self.tags, []),
+            "datasource_key": self.datasource_key,
             "use_count": self.use_count, "success_count": self.success_count,
             "enabled": bool(self.enabled), "builtin": bool(self.builtin),
             "scope": self.scope, "workspace_id": self.workspace_id,
