@@ -72,8 +72,9 @@ can always connect your own data.
 | **Settings Center** | Hot-reload LLM endpoints (DeepSeek / Zhipu / Qwen / any OpenAI-compatible API — takes effect on save, no restart); preferences (answer style / creativity / follow-up toggle / custom instructions); **UI language toggle (中文 / English)** — applies instantly to navigation / workbench / settings, persisted locally; profile |
 | **Reliability** | Network-isolated sandbox + CPU / memory limits + read-only data; `dahelper` JSON contract for returning results; SQLite metadata store in WAL mode; authorization enforced three times: API layer, runtime entry, before tool execution |
 | **Security boundary** | Artifacts / uploads / caches are served only through **authenticated routes** (no anonymous static mounts; path-traversal protection and workspace ownership lookup); database passwords are **encrypted at rest** (key from env only — a missing key refuses the save instead of writing plaintext); exports are filtered by workspace; full write-up in [docs/security.md](docs/security.md) |
-| **Evaluation** | 65 fixed questions (retail / manufacturing / colloquial adversarial cases) + **12 self-repair failure scenarios** (syntax / missing column / type / empty result / timeout / OOM / repeated error / multi-error / budget exhausted / acceptance-not-passed / sandbox unavailable / replay never repairs) + staged metric reports (semantic resolution / context injection / skill matching / replay admission / self-repair); metric thresholds wired into pytest as CI gates |
-| **Observability** | Every analysis run persists a `Run.trace`: per-stage latencies, LLM calls & tokens, skill hit mode, six result-acceptance checks, and **the acting user / workspace / role**; the frontend "run timeline" panel exposes it — skill replay's `LLM calls == 0` is data, not copy |
+| **Evaluation** | 65 fixed questions (retail / manufacturing / colloquial adversarial cases) + **12 self-repair failure scenarios** + a **cost / latency benchmark** (before vs after: calls / prompt tokens / deterministic latency / budget behaviour) (syntax / missing column / type / empty result / timeout / OOM / repeated error / multi-error / budget exhausted / acceptance-not-passed / sandbox unavailable / replay never repairs) + staged metric reports (semantic resolution / context injection / skill matching / replay admission / self-repair); metric thresholds wired into pytest as CI gates |
+| **Cost & latency** | Cost-aware routing: deterministic intent fast path (skips the LLM parse when the resolver is certain) + skill replay (0 calls) + deterministic follow-up suggestions + a context assembler (narrow the semantic layer to the metrics actually referenced, cap few-shot, de-duplicate) + a per-run budget (call / token / cost caps that stop early and say why) + deterministic caches (invalidated by file fingerprint / skill version); `Run.trace.cost_control` and `performance` account for every block, so **"why 2 LLM calls?", "where did the tokens go?", "which stage is slowest?" are answered by data** |
+| **Observability** | Every analysis run persists a `Run.trace`: per-stage latency, LLM calls & tokens, **cost-control profile (call attribution / budget utilisation / termination reason / intent & follow-up source)**, **performance profile (stage latency / bottleneck / cache hits / prompt block accounting)**, **skill-retrieval profile (8-signal candidate scores / chosen candidate / admission verdict / rejection & fallback reasons)**, **self-repair profile (first-pass success / attempts / error category & strategy per round / final success\|exhausted\|fallback)**, the six result-acceptance checks, and **the acting user / workspace / role** — all visible in the run-timeline panel; a replay run's `LLM calls == 0` is data, not a claim |
 
 ## Security
 
@@ -163,8 +164,52 @@ Result acceptance + Skill capture  trusted conclusions become Skills — next ti
                                    instant replay, zero tokens
 ```
 
+## Cost & Latency Optimization V1
+
+Before this round every analysis paid a flat **4 LLM calls** (intent parse / code generation /
+summary / follow-up suggestions) while carrying the whole semantic pack, two full few-shot
+code examples and a duplicated file list in the prompt. The round cut it to
+**2.19 calls / 1925 tokens per agent query** without changing any metric definition or
+bypassing any check:
+
+```
+intent parse (0 calls when the resolver is certain) -> skill retrieval -> replay admission
+   |-- high-confidence replay ---------------------> 0 LLM calls
+   |-- deterministic intent + candidates ----------> generate + summarize = 2 calls
+   \-- resolver cannot account for the question ---> fall back to the LLM, no guessing
+      (e.g. a value filter like "East China": the resolver knows the `region`
+       dimension but not the value, so "filter" must never become "group by")
+```
+
+- **Intent fast path** (`backend/agent/intent.py`): skips the LLM only when a metric is matched,
+  confidence clears the bar, **and every content word in the question has a known origin**;
+  anything unexplained falls back. Over the 65 labelled questions: 81.5% coverage with
+  **100% strict agreement** (metrics / dimensions / comparison / analysis type).
+- **Context assembler** (`backend/agent/context.py`): only the metrics and dimensions the
+  QuerySpec actually references, one few-shot example instead of two, no duplicated file list
+  in repair rounds, 2 history turns x 300 chars, result tables capped by rows
+  (**real numbers are never rewritten**). First-turn prompt: 1704 -> 1145 tokens (-32.8%).
+- **Run budget** (`backend/agent/budget.py`): call / input-token / output-token / cost caps
+  checked **before** the call is issued; an exhausted budget ends the run with a conclusion
+  built from the real sandbox output (never fabricated numbers); the repair allowance can only
+  tighten `MAX_FIX_ATTEMPTS`, never raise it.
+- **Deterministic caches** (`backend/analysis/cache.py`): data profiles (keyed by file
+  fingerprint + workspace), semantic rendering, deterministic resolution, skill intents.
+  **No identity decision is ever cached** — permissions, visibility and admission verdicts stay
+  uncached, and the cache registry plus its tests enforce that.
+- **No duplicated retrieval**: few-shot candidates reuse the candidates the routing stage
+  already scored instead of re-running retrieval.
+
+Full engineering story (Problem -> Baseline -> bottleneck -> Optimization -> Benchmark ->
+Result -> Trade-offs), per-block token breakdown, real trace samples and remaining limitations:
+[docs/cost-latency-v1.md](docs/cost-latency-v1.md). Reproduce with
+`python -m backend.evaluation --cost-benchmark`.
+
 ## Evaluation
 
+`python -m backend.evaluation --cost-benchmark` prints the cost / latency comparison
+(before vs after: calls / prompt tokens / deterministic latency / budget behaviour;
+runs fully offline and is explicitly **not a measurement**).
 `python -m backend.evaluation` prints a staged evaluation report (runs fully offline —
 no Docker / LLM needed; sandbox-dependent stages honestly report "not collected" when
 resources are missing instead of inventing numbers).
@@ -201,8 +246,15 @@ Self-Repair V2 (offline policy simulation: stubbed LLM/sandbox, real graph; NOT 
   Overall success rate                 75.0%                        baseline 25.0%
   Average repair attempts              1.17                         baseline 2.67
   Repeated-error / exhaustion rate     8.3% / 16.7%                 baseline 0.0% / 75.0%
-  LLM calls / tokens per query         5.00 / 2785                  baseline 6.08 / 4218
+  LLM calls / tokens per query         4.17 / 2594                  baseline 5.67 / 4096
   Replay never enters self-repair      2/2 assertions pass          replay = 0 repair / 0 LLM
+Cost & Latency V1 (offline: stubbed LLM/sandbox; call counts and prompt tokens ARE measured)
+  LLM calls / agent query              2.19                         baseline 4.00 (-45.4%)
+  Tokens / agent query                 1925                         baseline 3346 (-42.5%)
+  Generation prompt p50 / p95          795 / 1003                   baseline 926 / 1220
+  Intent fast-path hit rate            81.5%                        coverage 81.5% / strict accuracy 100.0%
+  Follow-up zero-LLM rate              100.0%                       baseline 0.0%
+  Replay zero-LLM assertions           6/6 pass                     replay = 0 calls / 0 tokens
 Execution / self-repair / end-to-end    needs the Docker sandbox; "not collected"
                                         when unavailable
 ```
@@ -211,8 +263,12 @@ The evaluation is not decoration — it has already driven three real fixes: the
 adversarial subset (60%) exposed missing synonyms ("地区") and ranking words ("最长") in
 the packs; after fixing, standard phrasing reached 100%. Adding the semantic-resolution
 skeleton to skill matching lifted Top1 from 64.6% to 72.3%, and Skill Retrieval V2 raised it
-to 78.5% while driving false replays from 4.6% to 0. Metric thresholds also gate pytest
-(`tests/evaluation/`) and CI.
+to 78.5% while driving false replays from 4.6% to 0. Self-Repair V2 lifted repair success from
+18.2% to 80.0% while cutting LLM calls by 26.5% and tokens by 36.7%. Cost & Latency V1
+took an agent query from 4.00 calls / 3346 tokens down to **2.19 calls / 1925 tokens**
+(-45.4% / -42.5%) — and the deterministic intent spec agreed with the human labels on
+**100%** of the queries it took over. What was cut is redundancy, not correctness.
+Metric thresholds also gate pytest (`tests/evaluation/`) and CI.
 
 ### Skill Retrieval V2 / Replay Admission
 
@@ -322,7 +378,8 @@ logic lives in the domain modules.
 │              the single permission-check entry                │
 │  agent/      Agent core: graph (LangGraph) + repair (error    │
 │              classification / targeted fixes / bounded retry) │
-│              + acceptance (gate) + sandbox client             │
+│              + acceptance (gate) + intent (deterministic      │
+│              fast path) + context/budget + sandbox client     │
 │  analysis/   Analysis Runtime (driving + persistence) +       │
 │              self-service analytics (zero tokens)             │
 │  skills/     Skill capture / retrieval / replay / few-shot    │
@@ -464,14 +521,20 @@ backend/                # FastAPI service (organised by business domain)
   agent/                # Agent core: graph prompts profiler sandbox
                         #   + repair (error classification / targeted repair / bounded retry)
                         #   + acceptance (shared hard gate for validation & self-repair)
+                        #   + intent (deterministic intent fast path) followups (deterministic)
+                        #   + context (prompt assembly + block accounting) budget (run budget)
+                        #   + tokens (token counting)
   analysis/             # Analysis Runtime (runtime) + self-service (explore)
+                        #   + cache (deterministic caches + hit accounting)
   skills/               # Skill capture / retrieval (score+admit) / replay (scope-isolated)
   insights/             # rule scans (engine) + scheduler
   datasource/           # file / DB access + parquet materialization
   semantic/             # semantic-pack runtime (registry + render + resolver)
   evaluation/           # evaluation pipeline: datasets / metrics / runner / retrieval bench
                         #   + self-repair bench (repair_cases + repair_bench)
-                        #   (python -m backend.evaluation [--benchmark|--repair-benchmark])
+                        #   + cost / latency bench (cost_bench: before vs after)
+                        #   (python -m backend.evaluation
+                        #     [--benchmark|--repair-benchmark|--cost-benchmark])
   report/               # export (builder for runs / exporter for dashboards)
 semantic_packs/         # industry semantic packs (retail_sales / manufacturing_production yaml)
 sandbox/                # standalone execution environment: sandbox image
@@ -548,7 +611,7 @@ execution, self-repair, and follow-up recommendation.
 ## Roadmap
 
 - **R2**: dashboards rendered client-side (interactive ECharts instead of PNG), insight subscription push, i18n for the remaining pages (the zh/en toggle already covers navigation / workbench / settings; the sign-in page and workspace selector are still Chinese-only); ~~multi-user support & permissions~~ (✅ shipped: sign-in / workspaces / UserContext / RBAC — see "Auth & RBAC")
-- **R3**: ~~regression evaluation~~ (✅ shipped: `backend/evaluation/` + `tests/evaluation/` gates; next: grow the question set and collect sandbox-execution metrics), visual semantic-pack editor, metric lineage
+- **R3**: ~~regression evaluation~~ (✅ shipped: `backend/evaluation/` + `tests/evaluation/` gates; next: grow the question set and collect sandbox-execution metrics), ~~cost & latency optimization~~ (✅ shipped as Cost & Latency V1 — see [docs/cost-latency-v1.md](docs/cost-latency-v1.md); next: a warm sandbox container pool and streaming conclusions), visual semantic-pack editor, metric lineage
 - **Security hardening (P1)**: ~~authenticate the static artifact mounts~~, ~~encrypt stored database passwords~~, ~~refresh tokens & revocation~~, ~~finer-grained permissions for settings / usage / analysis endpoints~~ (✅ shipped as Security Hardening V1 — see [docs/security.md](docs/security.md) for the full list and remaining limitations)
 - **Architecture (P2)**: `backend/routers/` → `api/` and `config/db/models/schemas` → `core/`; introduce `features/` domains in the frontend (see [.agents/rules/architecture.md](.agents/rules/architecture.md))
 

@@ -13,9 +13,12 @@ import urllib.parse
 from pathlib import Path
 
 from backend import config
+from backend.agent import budget as budget_mod
 from backend.agent.acceptance import acceptance_gate
 from backend.agent.graph import NODE_LABELS, stream_analysis
 from backend.agent.sandbox import run_in_sandbox
+from backend.agent.tokens import method as token_method
+from backend.analysis import cache as cache_mod
 from backend.analysis.validation import validate_final
 from backend.config import RUNS_DIR
 from backend.datasource.service import materialize, needs_materialize
@@ -41,18 +44,24 @@ def run_analysis_stream(
     skill_ids: list[int] | None = None,
     user_context: dict | None = None,
     retrieval: dict | None = None,
+    skill_candidates: list | None = None,
+    context_policy: str | None = None,
+    budget_overrides: dict | None = None,
 ) -> dict:
     """在工作线程中执行完整分析流，返回最终落库结果摘要。
 
-    全过程记入 `Run.trace`（分阶段耗时 / LLM 调用与 token / 口径解析 / 校验结论）。
-    **失败同样留痕**——排查问题时，失败的那一轮往往才是最需要看的。
+    全过程记入 `Run.trace`（分阶段耗时 / LLM 调用与 token / 口径解析 / 校验结论 /
+    成本与性能）。**失败同样留痕**——排查问题时，失败的那一轮往往才是最需要看的。
     user_context：可信后端解析的 UserContext 字典（可为空 = 匿名旧链路）。
     retrieval：Skill 检索 + 重放准入结论（写进 trace.skill.retrieval，
     用于回答「为什么这次没重放、为什么落到 Agent」）。
+    skill_candidates：路由阶段已经算好的 few-shot 候选（避免重复检索一遍）。
     """
     t0 = time.time()
     emit = on_event or (lambda *_: None)
     stages: list[dict] = []
+    # 缓存增量统计：用来回答"这次省下来的确定性开销是不是真的"
+    cache_before = cache_mod.snapshot()
     try:
         # Tool 级权限检查（纵深防御的第二道门）：API 层已拦一道，
         # 这里再拦一道，Viewer 绕过前端直调也无法推进分析链路。
@@ -66,9 +75,14 @@ def run_analysis_stream(
             history = _history_from_session(db, session_id)
         final, stages = _drive(run_pk, question, files, history, spec,
                                semantic_block, skill_block, emit, session_id=session_id,
-                               user_context=user_context)
+                               user_context=user_context,
+                               semantic_packs=(semantic_meta or {}).get("packs") or [],
+                               skill_candidates=skill_candidates,
+                               context_policy=context_policy,
+                               budget_overrides=budget_overrides)
         trace = _build_trace(run_pk, question, t0, stages, final, semantic_meta,
-                             skill_block, skill_ids, user_context, retrieval)
+                             skill_block, skill_ids, user_context, retrieval,
+                             cache_diff=cache_mod.diff(cache_before))
         with SessionLocal() as db:
             summary = _persist_result(db, run_pk, session_id, question, data_source_ids,
                                       final, int((time.time() - t0) * 1000), trace)
@@ -106,6 +120,10 @@ def run_analysis_stream(
                                     "repair_strategy": "", "repair_reason": str(exc)[:300],
                                     "attempts": [], "repair_latency_ms": _latency_stats([]),
                                     "llm": _llm_stats(run_pk)},
+                    # 成本/性能段照旧留痕：失败轮同样要能回答"Token 花在哪、卡在哪"
+                    "cost_control": build_cost_control_trace({}, _llm_stats(run_pk)),
+                    "performance": build_performance_trace({}, stages,
+                                                           cache_mod.diff(cache_before)),
                     "error": str(exc)[:500],
                 })
                 db.commit()
@@ -182,7 +200,11 @@ def _history_from_session(db, session_id: int, limit: int = 3) -> list[dict]:
 # ---- 驱动阶段：事件映射 ----
 
 def _drive(run_pk, question, files, history, spec, semantic_block, skill_block, emit,
-           session_id=None, user_context: dict | None = None) -> tuple[dict, list[dict]]:
+           session_id=None, user_context: dict | None = None,
+           semantic_packs: list[str] | None = None,
+           skill_candidates: list | None = None,
+           context_policy: str | None = None,
+           budget_overrides: dict | None = None) -> tuple[dict, list[dict]]:
     """驱动图谱并把每个节点的耗时记进 stages（供 trace 使用）。
 
     `stream_analysis` 每完成一个节点才 yield，因此"上一次 yield 到这一次 yield
@@ -197,6 +219,8 @@ def _drive(run_pk, question, files, history, spec, semantic_block, skill_block, 
         question, files, history=history, spec=spec,
         semantic_block=semantic_block, skill_block=skill_block,
         run_id=run_pk, session_id=session_id, user_context=user_context,
+        semantic_packs=semantic_packs, skill_candidates=skill_candidates,
+        context_policy=context_policy, budget_overrides=budget_overrides,
     ):
         now = time.time()
         stage = {
@@ -210,6 +234,14 @@ def _drive(run_pk, question, files, history, spec, semantic_block, skill_block, 
             stage["attempt"] = merged.get("attempts", 0)
         elif node == "generate_code":
             stage["attempt"] = merged.get("attempts", 0)
+            if merged.get("generate_blocked"):
+                stage["status"] = "blocked"
+                stage["blocked_by"] = "budget"
+        elif node == "parse_intent":
+            # 意图来源进时间线：一眼看出"这一步到底调没调 LLM"
+            stage["intent_source"] = merged.get("intent_source", "")
+            stage["tokens"] = (merged.get("context_stats") or {}).get("intent", {}).get(
+                "total_tokens", 0)
         elif node == "classify":
             # 自修复决策进 stages：时间线里就能看出"这一轮是修还是不修、按什么类别修"
             stage["error_category"] = merged.get("error_category", "")
@@ -277,7 +309,7 @@ def _predict_next(node: str, merged: dict) -> str | None:
     if node == "parse_intent":
         return "generate_code"
     if node == "generate_code":
-        return "execute"
+        return "summarize" if merged.get("generate_blocked") else "execute"
     if node == "execute":
         return "classify"
     if node == "classify":
@@ -329,6 +361,14 @@ def _persist_result(db, run_pk, session_id, question, data_source_ids,
             "repair_attempts": (trace or {}).get("self_repair", {}).get("repair_attempts", 0),
             "error_category": (trace or {}).get("self_repair", {}).get("error_category", ""),
         },
+        # 成本摘要随消息一起回传：前端不必再取一次 trace 就能显示"这轮花了多少"
+        "cost": {
+            "llm_calls": (trace or {}).get("cost_control", {}).get("llm_calls", 0),
+            "total_tokens": (trace or {}).get("cost_control", {}).get("total_tokens", 0),
+            "intent_source": (trace or {}).get("cost_control", {}).get("intent_source", ""),
+            "termination_reason": (trace or {}).get("cost_control", {}).get(
+                "termination_reason", ""),
+        },
     }
     msg = Message(session_id=session_id, role="assistant",
                   content=final.get("answer", "") or "（分析未产生结论，请查看执行日志）",
@@ -343,7 +383,8 @@ def _persist_result(db, run_pk, session_id, question, data_source_ids,
 # ---- 可观测性 ----
 
 def _build_trace(run_pk, question, t0, stages, final, semantic_meta,
-                 skill_block, skill_ids, user_context=None, retrieval=None) -> dict:
+                 skill_block, skill_ids, user_context=None, retrieval=None,
+                 cache_diff: dict | None = None) -> dict:
     """组装单次运行的可观测记录（写进 Run.trace，前端时间线与评估共用同一份）。"""
     execution = final.get("execution") or {}
     attempts = final.get("attempts", 0) or 0
@@ -374,7 +415,9 @@ def _build_trace(run_pk, question, t0, stages, final, semantic_meta,
         "latency_ms": int((time.time() - t0) * 1000),
         "stages_ms": sum(s.get("duration_ms", 0) for s in stages),
         "stages": stages,
-        "intent": final.get("spec") or {},
+        "intent": {**(final.get("spec") or {}),
+                   "resolution_source": final.get("intent_source", ""),
+                   "resolution_detail": final.get("intent_meta") or {}},
         "semantic": {
             "packs": packs,
             "source": (semantic_meta or {}).get("source", ""),
@@ -392,10 +435,99 @@ def _build_trace(run_pk, question, t0, stages, final, semantic_meta,
         },
         # Self-Repair V2 的观测段：能回答"为什么这个 Agent 修了 2 次才成功"
         "self_repair": build_self_repair_trace(final, llm_stats),
+        # Cost & Latency V1：成本与性能两段（回答"为什么调了 N 次 LLM / Token 花在哪 / 哪个阶段最慢"）
+        "cost_control": build_cost_control_trace(final, llm_stats),
+        "performance": build_performance_trace(final, stages, cache_diff),
         "llm": llm_stats,
         "validation": validation,
         "final_status": "done" if validation["status"] != "fail" else "failed",
     }
+
+
+def _budget_utilization(limit: dict, used: dict) -> dict:
+    """预算使用率：已用量 / 上限（未配置上限的项为 None，表示"不限"）。"""
+    pairs = {"llm_calls": "max_llm_calls", "input_tokens": "max_input_tokens",
+             "output_tokens": "max_output_tokens", "total_tokens": "max_total_tokens",
+             "cost_usd": "max_cost_usd"}
+    out: dict[str, float | None] = {}
+    for used_key, limit_key in pairs.items():
+        cap = limit.get(limit_key)
+        out[used_key] = round(used.get(used_key, 0) / cap, 3) if cap else None
+    return out
+
+
+def build_cost_control_trace(final: dict, llm: dict | None = None) -> dict:
+    """成本控制档案：`Run.trace.cost_control`。
+
+    回答四个问题：
+    1. **调了几次 LLM、为什么是这个次数**——`llm_calls` 与 `by_node`（哪个节点调的）；
+    2. **Token 花在哪**——input/output 合计 + 每个节点的调用次数；
+    3. **有没有被预算拦下**——`budget_blocked_calls` / `termination_reason`；
+    4. **这次省在哪**——`intent_source`（是否跳过了解析调用）、`followup_source`。
+    """
+    limit = final.get("budget_limit") or {}
+    used = final.get("budget_used") or {}
+    llm = llm or {}
+    calls_by_node = llm.get("by_node") or {}
+    return {
+        "llm_calls": llm.get("calls", 0),
+        "calls_by_node": calls_by_node,
+        "input_tokens": llm.get("input_tokens", 0),
+        "output_tokens": llm.get("output_tokens", 0),
+        "total_tokens": (llm.get("input_tokens", 0) or 0) + (llm.get("output_tokens", 0) or 0),
+        "estimated_cost_usd": llm.get("cost_usd", 0.0),
+        "budget_limit": limit,
+        "budget_used": used,
+        "budget_blocked_calls": used.get("blocked_calls", 0),
+        "budget_utilization": _budget_utilization(limit, used),
+        "termination_reason": final.get("termination_reason", "") or "",
+        "termination_label": (used.get("termination_label") or
+                              budget_mod.TERMINATION_LABELS.get(
+                                  final.get("termination_reason", ""), "")),
+        "budget_reason": final.get("budget_reason", ""),
+        "blocked_node": final.get("budget_blocked_node", ""),
+        "usage_source": final.get("budget_usage_source", "") or "provider",
+        "token_counter": token_method(),
+        "intent_source": final.get("intent_source", ""),
+        "followup_source": final.get("followup_source", ""),
+        "summarize_source": final.get("summarize_source", ""),
+        "notes": list(used.get("notes") or []),
+    }
+
+
+def build_performance_trace(final: dict, stages: list[dict] | None = None,
+                            cache_diff: dict | None = None) -> dict:
+    """性能档案：`Run.trace.performance`。
+
+    分阶段耗时（`stage_latency`）来自真实墙钟；`bottleneck` 直接给出最慢的阶段，
+    避免"凭感觉优化"。缓存段给出本次运行的命中/未命中增量（跨运行累计值不在此处，
+    避免把历史缓存算成本次成绩）。
+    """
+    stages = list(stages or [])
+    ordered = sorted(stages, key=lambda s: -(s.get("duration_ms") or 0))
+    ctx = final.get("context_stats") or {}
+    return {
+        "stage_latency": [
+            {"node": s.get("node"), "label": s.get("label"),
+             "duration_ms": s.get("duration_ms", 0), "status": s.get("status", "done")}
+            for s in stages
+        ],
+        "bottleneck": ({"node": ordered[0].get("node"),
+                        "label": ordered[0].get("label"),
+                        "duration_ms": ordered[0].get("duration_ms", 0)}
+                       if ordered else {}),
+        "total_stage_ms": sum(s.get("duration_ms", 0) for s in stages),
+        "llm_stage_ms": sum(s.get("duration_ms", 0) for s in stages
+                            if s.get("node") in ("parse_intent", "generate_code",
+                                                 "summarize", "suggest_followups")),
+        "sandbox_stage_ms": sum(s.get("duration_ms", 0) for s in stages
+                                if s.get("node") == "execute"),
+        "cache": cache_diff or {"hits": 0, "misses": 0, "hit_rate": 0.0,
+                                "by_category": {}},
+        "context": ctx,
+        "queue_wait_ms": None,   # 当前架构没有队列等待（并发护栏是信号量，不计排队时长）
+    }
+
 
 
 def build_self_repair_trace(final: dict, llm: dict | None = None) -> dict:

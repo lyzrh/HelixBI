@@ -265,6 +265,51 @@ def render_report(report: dict) -> str:
     elif sr.get("status") == "error":
         lines.append(_row("Self-Repair 离线仿真", "未采集", sr.get("reason", "")))
 
+    cost = report.get("cost", {})
+    if cost.get("status") == "ok":
+        cb, co = cost["baseline"], cost["optimized"]
+        gate = cost["intent_gate"]
+        shipped = next((g for g in gate["by_threshold"]
+                        if abs(g["threshold"] - gate["shipped_threshold"]) < 1e-9), {})
+        lines.append("-" * 66)
+        lines.append("Cost & Latency Optimization V1（离线：桩化 LLM/沙箱，"
+                     "调用次数与 prompt token 为实测；measured=false）")
+        lines.append(_row("LLM 调用 / Agent 查询",
+                          f"{co['llm_calls_per_agent_query']:.2f}",
+                          f"基线 {cb['llm_calls_per_agent_query']:.2f}  "
+                          f"Δ {_signed(co['llm_calls_per_agent_query'] - cb['llm_calls_per_agent_query'], 2)}"))
+        lines.append(_row("Token / Agent 查询",
+                          f"{co['total_tokens_per_agent_query']:.0f}",
+                          f"基线 {cb['total_tokens_per_agent_query']:.0f}", indent=1))
+        lines.append(_row("生成 prompt 上下文 p50 / p95",
+                          f"{co['context_tokens_p50']:.0f}/{co['context_tokens_p95']:.0f}",
+                          f"基线 {cb['context_tokens_p50']:.0f}/{cb['context_tokens_p95']:.0f} tok",
+                          indent=1))
+        det = co["deterministic_latency_ms"]
+        det0 = cb["deterministic_latency_ms"]
+        lines.append(_row("确定性阶段 p50 / p95（实测）",
+                          f"{det['p50_ms']:.1f}/{det['p95_ms']:.1f} ms",
+                          f"基线 {det0['p50_ms']:.1f}/{det0['p95_ms']:.1f} ms", indent=1))
+        lines.append(_row("└ 整体投影 p50",
+                          f"{co['projected_latency_ms']['p50_ms']:.0f} ms",
+                          f"基线 {cb['projected_latency_ms']['p50_ms']:.0f} ms"
+                          "（LLM/沙箱为建模值）", indent=1))
+        lines.append(_row("意图快路径命中率", _pct(co["intent_fastpath_rate"]),
+                          f"覆盖率 {_pct(shipped.get('coverage', 0.0))} / "
+                          f"严格准确率 {_pct(shipped.get('strict_accuracy', 0.0))}", indent=1))
+        lines.append(_row("追问零 LLM 率", _pct(co["followup_zero_llm_rate"]),
+                          f"基线 {_pct(cb['followup_zero_llm_rate'])}", indent=1))
+        bs = cost.get("budget_stress", {})
+        lines.append(_row("预算耗尽率 / 兜底诚实率",
+                          f"{_pct(co['budget_exhausted_rate'])}/"
+                          f"{_pct(bs.get('honest_answer_rate', 0.0))}",
+                          "预算耗尽必须给终止原因且不编造结论", indent=1))
+        rguard = cost.get("replay_guard", {})
+        lines.append(_row("Skill 重放零 LLM 校验",
+                          f"{rguard.get('passed', 0)}/{rguard.get('cases', 0)} 断言通过",
+                          "重放 = 0 调用 / 0 token / 不进自修复", indent=1))
+        lines.append(_row("└ Token 计数方法", "", cost.get("token_counter", ""), indent=1))
+
     lines.append("-" * 66)
     lines.append("以下阶段需要 Docker 沙箱 / LLM，资源缺失时显示「未采集」而非编造数字：")
     for key, label in (("execution", "代码执行成功率"), ("self_repair", "自修复成功率"),

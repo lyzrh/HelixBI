@@ -2,6 +2,7 @@
 
 import asyncio
 import json
+import time
 
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import StreamingResponse
@@ -82,12 +83,14 @@ async def analyze(sid: int, body: AnalyzeBody, db: Session = Depends(get_db),
     # 请求作用域内完成 Skill 路由：Retrieval（召回）→ Admission（准入）→ 重放 or Agent
     from backend.skills import engine as skill_engine
 
+    t_route = time.perf_counter()
     decision = skill_engine.route_query(
         db, body.question, data_source_ids=body.data_source_ids,
         workspace_id=ctx.workspace_id, user_id=ctx.user_id)
-    skills = skill_engine.match_skills(db, body.question,
-                                       workspace_id=ctx.workspace_id,
-                                       user_id=ctx.user_id)
+    # few-shot 候选**复用**刚才那次召回的候选，不再重复 match_skills 一遍
+    # （旧实现会对同一批 Skill、同一个问题打分两次 + 查两次可见性）
+    skills = skill_engine.skills_for_candidates(db, decision.candidates)
+    routing_ms = int((time.perf_counter() - t_route) * 1000)
     skill_block = skill_engine.render_skill_prompt(skills)
     # 会话标题在两条路径上都要更新（重放路径不经过下面的 Run 创建逻辑）
     if session.title == "新会话" or not session.title:
@@ -104,7 +107,7 @@ async def analyze(sid: int, body: AnalyzeBody, db: Session = Depends(get_db),
             return skill_engine.run_skill(
                 skill_pk, sid, list(body.data_source_ids), on_event,
                 workspace_id=ctx.workspace_id, question=body.question,
-                decision=decision)
+                decision=decision, routing_ms=routing_ms)
 
         return await sse_stream(work)
 
@@ -125,7 +128,8 @@ async def analyze(sid: int, body: AnalyzeBody, db: Session = Depends(get_db),
             run_pk, sid, body.question, list(body.data_source_ids),
             body.spec, skill_block, body.agent_id, on_event,
             skill_ids=[s.id for s in skills],
-            retrieval=decision.to_dict(),
+            retrieval={**decision.to_dict(), "routing_ms": routing_ms},
+            skill_candidates=skills,
         )
 
     return await sse_stream(work)

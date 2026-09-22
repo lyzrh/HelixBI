@@ -106,7 +106,7 @@ curl -X POST http://127.0.0.1:8000/api/auth/switch-workspace \
 | POST | `/api/sessions/{sid}/analyze` | `analysis:execute` | **SSE** 流式分析（Skill 匹配 → 图谱执行 → 落库） |
 | POST | `/api/sessions/{sid}/parse` | `analysis:execute` | 仅跑意图解析，返回 QuerySpec 供人工确认 |
 | GET | `/api/runs/recent` | `analysis:read` | 最近分析运行（按工作区过滤） |
-| GET | `/api/runs/{rid}` | `analysis:read` | 运行详情（含 `trace`：`stages` / `semantic` / `skill.retrieval` / `self_repair` / `llm` / `validation`；跨工作区 404） |
+| GET | `/api/runs/{rid}` | `analysis:read` | 运行详情（含 `trace`：`stages` / `semantic` / `skill.retrieval` / `self_repair` / **`cost_control`（调用归因 / 预算使用 / 终止原因）** / **`performance`（阶段耗时 / 瓶颈 / 缓存命中 / 上下文分块记账）** / `llm` / `validation`；跨工作区 404） |
 | GET | `/api/runs/{rid}/export` | `analysis:read` | 导出单轮分析 HTML 报告（图表路径越界一律忽略） |
 | POST | `/api/runs/{rid}/rerun` | `analysis:execute` | 用存量 spec 重跑（**SSE**，同样受工作区隔离约束） |
 
@@ -192,4 +192,5 @@ curl -X POST http://127.0.0.1:8000/api/auth/switch-workspace \
 - 静态挂载未鉴权问题已修复（`backend/routers/files.py` 鉴权下发，按工作区校验）。
 - `settings` / `agents` / `insights` / `usage` 的权限点已细分（Security Hardening V1 新增 `analysis:read` / `usage:read` / `settings:write`；`agents` 的写入沿用 `workspace:manage`；`utils/export_table` 仅导出前端已持有数据，保持登录门）。
 - 完整安全设计、审计事件清单与剩余限制见 [docs/security.md](security.md)。
+- 成本 / 延迟指标口径、预算终止原因与上下文分块记账见 [docs/cost-latency-v1.md](cost-latency-v1.md)；一键复现 `python -m backend.evaluation --cost-benchmark`。
 - 无刷新令牌与注销黑名单；`data_sources.password` 仍为明文字段。

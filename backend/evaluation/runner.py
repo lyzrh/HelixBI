@@ -386,7 +386,24 @@ def eval_self_repair_offline() -> dict:
         return {"status": "error", "reason": f"离线仿真执行失败：{exc}"}
 
 
-# ---- 7. 端到端（需 Docker + LLM，缺失则跳过） ----
+# ---- 7. 成本 / 延迟（离线：桩化 LLM/沙箱，驱动真实图谱；调用次数与 prompt token 是实测） ----
+
+def eval_cost_optimization(limit: int | None = None) -> dict:
+    """改造前（冻结开关）vs Cost & Latency Optimization V1 的对照。
+
+    与 `eval_self_repair_offline` 同一套诚实性约定：LLM 与沙箱被桩化，
+    但**被测的决策与装配全是真实代码**（调用次数、prompt token、确定性耗时是实测），
+    结果里显式标注 `mode="offline_simulation"` / `measured=False`。
+    """
+    from backend.evaluation import cost_bench
+
+    try:
+        return cost_bench.evaluate(limit=limit)
+    except Exception as exc:  # noqa: BLE001 — 基准失败要如实说
+        return {"status": "error", "reason": f"成本基准执行失败：{exc}"}
+
+
+# ---- 8. 端到端（需 Docker + LLM，缺失则跳过） ----
 
 def pipeline_blocker() -> str | None:
     """返回阻塞原因；None 表示可以真实跑链路。
@@ -528,6 +545,8 @@ def run_all(with_pipeline: bool = False, limit: int = 3) -> dict:
     report["baseline_skills"] = eval_skills(cases, policy="v1")
     # Self-Repair V2：离线策略仿真（桩化 LLM/沙箱，驱动真实图谱；非实测）
     report["self_repair_offline"] = eval_self_repair_offline()
+    # Cost & Latency V1：改造前 vs 优化后的离线对照（调用次数 / prompt token / 确定性耗时）
+    report["cost"] = eval_cost_optimization()
 
     if with_pipeline:
         pipeline = eval_pipeline(cases, limit=limit)
@@ -559,4 +578,4 @@ def run_all(with_pipeline: bool = False, limit: int = 3) -> dict:
 
 __all__ = ["run_all", "eval_semantic", "eval_planning", "eval_skills",
            "eval_replay_guard", "eval_retrieval_admission", "eval_pipeline",
-           "eval_self_repair_offline", "pipeline_blocker"]
+           "eval_self_repair_offline", "eval_cost_optimization", "pipeline_blocker"]

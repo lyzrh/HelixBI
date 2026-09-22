@@ -3,8 +3,9 @@
 默认只跑离线阶段（确定性、无外部依赖，CI 可跑）；
 加 `--with-pipeline` 才真实驱动 Agent 链路（需 Docker 沙箱 + LLM API Key）。
 
-另外两个子能力：
+另外三个子能力：
 - `--benchmark`：打印 Skill Retrieval V1(Baseline) vs V2 的对照表（Markdown），可落盘；
+- `--cost-benchmark`：打印改造前 vs 成本/延迟优化后的对照表（调用次数 / prompt token / 耗时）；
 - `--tune-weights` / `--sensitivity`：权重的标定与敏感性分析（权重配置化的依据）。
 """
 
@@ -103,6 +104,26 @@ def _run_repair_benchmark(args) -> int:
     return 0
 
 
+def _run_cost_benchmark(args) -> int:
+    """成本 / 延迟对照：改造前（冻结开关）vs Cost & Latency Optimization V1。"""
+    from backend.evaluation import cost_bench as bench
+
+    result = bench.evaluate(top_k=args.top_k, limit=args.cost_limit or None)
+    markdown = bench.render_markdown(result)
+    print(markdown)
+    if args.markdown:
+        Path(args.markdown).write_text(markdown + "\n", encoding="utf-8")
+        print(f"\n已写出 Markdown：{args.markdown}")
+    if args.json_path:
+        slim = {k: v for k, v in result.items() if k not in ("baseline", "optimized")}
+        slim["baseline"] = {k: v for k, v in result["baseline"].items() if k != "outcomes"}
+        slim["optimized"] = {k: v for k, v in result["optimized"].items() if k != "outcomes"}
+        Path(args.json_path).write_text(
+            json.dumps(slim, ensure_ascii=False, indent=2), encoding="utf-8")
+        print(f"\n已写出 JSON：{args.json_path}")
+    return 0
+
+
 def _run_tuning(args) -> int:
     from backend import config
     from backend.evaluation import retrieval_bench as bench
@@ -140,6 +161,10 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--markdown", default="", help="--benchmark 的 Markdown 输出路径")
     parser.add_argument("--repair-benchmark", action="store_true",
                         help="只跑 Self-Repair Baseline(V1) vs V2 对照（离线策略仿真）")
+    parser.add_argument("--cost-benchmark", action="store_true",
+                        help="只跑成本/延迟对照：改造前 vs Cost & Latency Optimization V1")
+    parser.add_argument("--cost-limit", type=int, default=0,
+                        help="配合 --cost-benchmark：只跑前 N 条问题（默认全量 65 条）")
     parser.add_argument("--repair-live", action="store_true",
                         help="配合 --repair-benchmark：追加真实链路实测（需 Docker + LLM）")
     parser.add_argument("--top-k", type=int, default=5, help="Recall@K 的 K（默认 5）")
@@ -153,6 +178,8 @@ def main(argv: list[str] | None = None) -> int:
         return _run_benchmark(args)
     if args.repair_benchmark:
         return _run_repair_benchmark(args)
+    if args.cost_benchmark:
+        return _run_cost_benchmark(args)
     if args.tune_weights:
         return _run_tuning(args)
 

@@ -25,8 +25,10 @@
 登录 → 选择工作区（角色 / 权限 / 数据范围随之确定）
   → 连接数据（文件 / 数据库，归属工作区）
   → 对话提问（可选口径确认）
-  → SSE 流式分析（Skill 检索命中 → 秒级重放、零 token；不命中 / 重放失败 → LLM 生成 + 失败自修复）
-      · 自修复 V2：错误分类 → 定向修复 → 有界重试 → 兜底（复读提前终止，失败也留可解释 trace）
+  → SSE 流式分析（成本感知路由：语义解析 → Skill 检索 → 重放准入 → 要不要调 LLM）
+      · Skill 高置信重放：秒级、**0 次 LLM 调用**
+      · 确定性意图快路径：解析器能确定就**跳过 LLM 解析**（覆盖率 81.5%，与人工标注 100% 一致）
+      · 其余走完整 Agent：LLM 生成 + 失败自修复 + 运行预算护栏（超预算提前结束并如实说明）
   → 结论 + 图表 + 表格 + 追问
   → 沉淀为 Skill / 固定到仪表板
   → 定时洞察扫描 → LLM 经营诊断 → 仪表板 → 导出报告
@@ -68,8 +70,9 @@
 | **设置中心** | LLM 接口热更新（DeepSeek / 智谱 / 通义 / OpenAI 兼容接口，保存即生效）；偏好设置（回答风格 / 创意度 / 追问开关 / 自定义指令）；**界面语言中英切换**（导航 / 工作台 / 设置中心即时生效，本地持久化）；个人资料 |
 | **可靠性** | 沙箱无网络 + CPU / 内存限制 + 数据只读；`dahelper` JSON 契约回传；SQLite 元数据库 WAL 模式；认证与权限在 API 层、运行时、工具执行前三次收口 |
 | **安全边界** | 产物 / 上传 / 缓存全部走**鉴权下发**（无匿名静态目录，含路径遍历防护与工作区归属反查）；数据源口令**应用级加密**（密钥只来自环境变量，缺密钥拒绝保存）；导出链路按工作区过滤；完整清单见 [docs/security.md](docs/security.md) |
-| **评估体系** | 65 条固定问题集（零售 / 制造 / 口语化对抗样例）+ **20 条对抗准入样例**（同指标不同维度 / 排序方向相反 / 时间窗变化 / 数据源变化 / 相似 Skill 竞争…）+ **12 条自修复失败场景**（语法 / 列名 / 类型 / 空结果 / 超时 / OOM / 复读 / 多错 / 额度耗尽 / 验收不过 / 环境不可用 / 重放不进自修复）+ 分阶段指标报告（语义解析 / 口径注入 / Skill 检索 / 重放准入 / 自修复 / 效率）；基线可复现（V1 策略冻结留档），指标作为 CI 门禁进 pytest 与 CI |
-| **可观测性** | 每轮分析落 `Run.trace`：分阶段耗时、LLM 调用与 token、**Skill 检索档案（候选 8 路分数 / 选中项 / 准入结论 / 拒绝与 fallback 原因）**、**自修复档案（首次成功 / 修复次数 / 每轮错误类别与策略 / 每轮耗时 / 最终 success|exhausted|fallback）**、六项结果验收、**触发者用户 / 工作区 / 角色**；前端「运行时间线」面板可展开查看——Skill 重放的 `LLM calls == 0` 是数据不是文案 |
+| **评估体系** | 65 条固定问题集（零售 / 制造 / 口语化对抗样例）+ **20 条对抗准入样例**（同指标不同维度 / 排序方向相反 / 时间窗变化 / 数据源变化 / 相似 Skill 竞争…）+ **12 条自修复失败场景** + **成本/延迟基准**（改造前 vs 优化后：调用次数 / prompt token / 确定性耗时 / 预算行为）+ 分阶段指标报告（语义解析 / 口径注入 / Skill 检索 / 重放准入 / 自修复 / 成本与延迟 / 效率）；基线可复现（策略与开关冻结留档），指标作为 CI 门禁进 pytest 与 CI |
+| **成本与延迟** | 成本感知路由：确定性意图快路径（命中即跳过 LLM 解析）+ Skill 重放（0 调用）+ 确定性追问 + 上下文装配器（按命中口径收窄语义层、few-shot 限流、去重）+ 运行预算（调用 / token / 成本上限，超限提前结束并说明原因）+ 确定性缓存（按文件指纹 / Skill 版本失效）；`Run.trace.cost_control` / `performance` 逐块记账，**「为什么调了 2 次 LLM」「Token 花在哪」「哪个阶段最慢」都能从数据回答** |
+| **可观测性** | 每轮分析落 `Run.trace`：分阶段耗时、LLM 调用与 token、**成本控制档案（调用归因 / 预算使用率 / 终止原因 / 意图与追问来源）**、**性能档案（阶段耗时 / 瓶颈 / 缓存命中 / prompt 分块记账）**、**Skill 检索档案（候选 8 路分数 / 选中项 / 准入结论 / 拒绝与 fallback 原因）**、**自修复档案（首次成功 / 修复次数 / 每轮错误类别与策略 / 每轮耗时 / 最终 success\|exhausted\|fallback）**、六项结果验收、**触发者用户 / 工作区 / 角色**；前端「运行时间线」面板可展开查看——Skill 重放的 `LLM calls == 0` 是数据不是文案 |
 
 ## 安全（Security）
 
@@ -155,6 +158,8 @@ Docker 沙箱执行            无网络 + 资源限制 + 数据只读
 
 ## Evaluation（评估）
 
+`python -m backend.evaluation --cost-benchmark` 输出成本/延迟对照表（改造前 vs 优化后：
+调用次数 / prompt token / 确定性耗时 / 预算行为；离线可跑，**不是实测**）。
 `python -m backend.evaluation` 输出分阶段评估报告（离线可跑，不需 Docker / LLM；
 需要沙箱的阶段在资源缺失时如实标注「未采集」而不是编造数字）。
 
@@ -189,8 +194,15 @@ Self-Repair V2（离线策略仿真：桩化 LLM/沙箱，驱动真实图谱；�
   总成功率                   75.0%                    基线 25.0%
   平均修复次数                1.17                     基线 2.67
   复读检测率 / 修复耗尽率      8.3% / 16.7%             基线 0.0% / 75.0%
-  LLM 调用 / Token / 查询     5.00 / 2785              基线 6.08 / 4218
+  LLM 调用 / Token / 查询     4.17 / 2594              基线 5.67 / 4096
   Skill 重放不进自修复         2/2 断言通过              重放成功 = 0 修复 / 0 LLM
+Cost & Latency V1（离线：桩化 LLM/沙箱，调用次数与 prompt token 为实测；measured=false）
+  LLM 调用 / Agent 查询       2.19                     基线 4.00（-45.4%）
+  Token / Agent 查询          1925                     基线 3346（-42.5%）
+  生成 prompt 上下文 p50/p95   795 / 1003               基线 926 / 1220
+  意图快路径命中率             81.5%                    覆盖率 81.5% / 严格准确率 100.0%
+  追问零 LLM 率               100.0%                   基线 0.0%
+  Skill 重放零 LLM 校验        6/6 断言通过               重放 = 0 调用 / 0 token / 不进自修复
 代码执行 / 自修复 / 端到端    需 Docker 沙箱，资源缺失时如实标注「未采集」
 ```
 
@@ -224,6 +236,38 @@ Query → Semantic Resolution → Candidate Retrieval → Top-K 打分（8 路�
 对标 Baseline（V1 冻结策略）的完整对比表、权重标定过程与遗留问题：
 [`docs/skill-retrieval-v2.md`](docs/skill-retrieval-v2.md)；一键复现
 `python -m backend.evaluation --benchmark`。
+
+### Cost & Latency Optimization V1（成本感知路由 → 预算护栏 → 上下文瘦身）
+
+改造前每轮分析固定付 4 次 LLM 调用（意图解析 / 生成代码 / 整理结论 / 推荐追问），
+prompt 里塞着整包语义层、两例 few-shot 完整代码与重复的文件清单。本轮在**不改口径、
+不绕过安全检查**的前提下把它压到 2.19 次 / 1925 token：
+
+```
+语义解析（确定性够用就 0 调用）→ Skill 检索 → 重放准入
+   ├─ 高置信重放 ────────────────────────────→ 0 次 LLM
+   ├─ 意图解析可确定 ────────────────────────→ 生成 1 次 + 结论 1 次 = 2 次
+   └─ 解析器理解不了（如取值过滤「华东」） ────→ 老实回落 LLM，不猜
+```
+
+- **意图快路径**（`backend/agent/intent.py`）：命中指标 + 置信度达标 + **问题内容全部有出处**
+  三条同时满足才跳过 LLM；只要存在"解释不了的内容"（如「华东」这类**取值过滤**，
+  确定性解析器只能识别「区域」这个维度）立刻回落——把"筛选华东"猜成"按区域分组"
+  比多花一次调用糟得多。65 条人工标注上：覆盖率 81.5%，命中处严格准确率 **100%**；
+- **参数化上下文装配器**（`backend/agent/context.py`）：语义层只注入本次 QuerySpec 命中的口径、
+  few-shot 只注入最相关的一例、修复轮去掉重复的文件清单、历史 2 轮 × 300 字、
+  结论轮结果表按行收敛（**真实数字不改写**）；首轮 prompt 1704 → 1145 token（−32.8%）；
+- **LLM 运行预算**（`backend/agent/budget.py`）：调用次数 / 输入输出 token / 成本上限，
+  **预检在调用之前**（超限的请求根本不发出）；预算耗尽时结论由沙箱真实执行结果拼出，
+  不编造数字；修复额度只允许收紧，绝不放大 `MAX_FIX_ATTEMPTS`；
+- **确定性缓存**（`backend/analysis/cache.py`）：数据画像（按文件指纹 + 工作区）、语义渲染、
+  确定性解析、Skill 意图；**不缓存任何身份判定**（权限 / 可见性 / 准入），
+  登记表与测试一起守住这条约定；
+- **消除重复检索**：few-shot 候选复用路由阶段已算好的候选，不再重复召回与打分。
+
+工程故事（Problem → Baseline → 瓶颈 → 优化 → Benchmark → Result → Trade-offs）、
+逐块 token 构成、trace 示例与剩余限制：[`docs/cost-latency-v1.md`](docs/cost-latency-v1.md)；
+一键复现 `python -m backend.evaluation --cost-benchmark`。
 
 ### Agent Self-Repair V2（错误分类 → 定向修复 → 有界重试 → 兜底）
 
@@ -434,15 +478,20 @@ backend/                # FastAPI 服务（按业务领域组织）
   agent/                # Agent 内核：graph prompts profiler sandbox
                         #   + repair（错误分类 / 定向修复 / 有界重试）
                         #   + acceptance（结果验收硬门槛，validation 与 Self-Repair 共用）
+                        #   + intent（确定性意图快路径）followups（确定性追问）
+                        #   + context（prompt 上下文装配与分块记账）budget（运行预算）
+                        #   + tokens（token 计数）
   analysis/             # Analysis Runtime（runtime）+ 自助分析（explore）
+                        #   + cache（确定性缓存登记与命中统计）
   skills/               # Skill 沉淀 / 检索（retrieval：打分+准入）/ 重放（含作用域隔离）
   insights/             # 规则扫描（engine）+ 定时调度（scheduler）
   datasource/           # 文件 / DB 接入 + parquet 物化 + secrets（凭据加密 + 迁移）
   semantic/             # 语义包运行时（registry 加载 + render 渲染 + resolver 确定性解析）
   evaluation/           # 评估流水线：数据集 / 指标 / 运行器 / 检索基准 / 效率模型
                         #   + 自修复基准（repair_cases 场景 + repair_bench 离线策略仿真）
+                        #   + 成本/延迟基准（cost_bench：改造前 vs 优化后）
                         #   （python -m backend.evaluation
-                        #     [--benchmark|--repair-benchmark|--tune-weights]）
+                        #     [--benchmark|--repair-benchmark|--cost-benchmark|--tune-weights]）
   report/               # 报告导出（builder 单轮 / exporter 仪表板）
 semantic_packs/         # 行业语义包（retail_sales / manufacturing_production yaml）
 sandbox/                # 独立执行环境：沙箱镜像（pandas/pyarrow/matplotlib/
@@ -454,6 +503,7 @@ frontend/               # React + AntD + Zustand + Vite
   src/api/              # client（注入 token / 401 跳转） sse（流式读取）
 tests/                  # pytest 套件（evaluation/ 指标门禁 + test_auth_rbac.py 权限用例）
 docs/                   # api.md（接口清单） + security.md（安全设计与剩余限制）
+                        #   + cost-latency-v1.md（成本/延迟工程故事与基准）
                         #   + skill-retrieval-v2.md
                         #   + self-repair-v2.md（自修复工程故事与基准）+ README 图片
 examples/               # 示例数据（零售 / 生产 CSV，演示用生成数据）
@@ -517,7 +567,7 @@ curl http://127.0.0.1:8000/api/datasources \
 ## Roadmap
 
 - **R2**：仪表板图表前端化（ECharts 交互渲染替代 PNG）、洞察订阅推送、其余页面文案国际化（当前中英切换已覆盖导航 / 工作台 / 设置中心，登录页与工作区选择器仍为中文）；~~多用户与权限~~（✅ 已落地：登录 / 工作区 / UserContext / RBAC，见「认证与权限」）
-- **R3**：~~评估集回归~~（✅ 已落地：`backend/evaluation/` + `tests/evaluation/` 门禁；下一步扩充问题集并采集沙箱执行指标）、语义包可视化编辑器、指标血缘
+- **R3**：~~评估集回归~~（✅ 已落地：`backend/evaluation/` + `tests/evaluation/` 门禁；下一步扩充问题集并采集沙箱执行指标）、~~成本与延迟优化~~（✅ 已落地：Cost & Latency V1，见 [docs/cost-latency-v1.md](docs/cost-latency-v1.md)；下一步做沙箱容器预热池与流式结论）、语义包可视化编辑器、指标血缘
 - **安全加固（P1）**：~~静态产物目录鉴权~~、~~数据库密码加密存储~~、~~刷新令牌与注销~~、~~按权限点细分设置 / 用量 / 分析类接口~~（✅ 已落地：Security Hardening V1，见 [docs/security.md](docs/security.md)；剩余限制也写在该文档里）
 - **架构演进（P2）**：`backend/routers/` → `api/`、`config/db/models/schemas` 收敛到 `core/`；前端引入 `features/` 分域（详见 [.agents/rules/architecture.md](.agents/rules/architecture.md)）
 

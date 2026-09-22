@@ -9,6 +9,8 @@
 本模块是纯函数、零 token、无副作用，只依赖 `semantic_packs/` 配置。
 """
 
+import copy
+import functools
 import re
 
 from backend.semantic.registry import load_pack
@@ -54,11 +56,44 @@ _CN_NUM = {"一": 1, "二": 2, "两": 2, "三": 3, "四": 4, "五": 5,
 
 # ---- 术语索引与匹配 ----
 
-def _term_index(pack: dict) -> list[tuple[str, str, dict]]:
+@functools.lru_cache(maxsize=16)
+def _term_index_by_pack(pack_id: str) -> tuple[tuple[str, str, int], ...]:
+    """术语索引（按 pack 缓存）：构造 + 排序是每次解析里最贵的一步。
+
+    缓存的是**不可变元组**（term, kind, entry 下标），避免把可变 dict 缓存起来被下游改写。
+    """
+    pack = load_pack(pack_id) or {}
+    entries: list[dict] = []
+    index: list[tuple[str, str, int]] = []
+    for m in pack.get("metrics", []):
+        entries.append(m)
+        idx = len(entries) - 1
+        for t in {m.get("name", ""), *m.get("synonyms", [])}:
+            if t:
+                index.append((t, "metric", idx))
+    for d in pack.get("dimensions", []):
+        entries.append(d)
+        idx = len(entries) - 1
+        for t in {d.get("name", ""), *d.get("synonyms", [])}:
+            if t:
+                index.append((t, "dimension", idx))
+    index.sort(key=lambda item: -len(item[0]))
+    return tuple(index)
+
+
+def _term_index(pack: dict, pack_id: str = "") -> list[tuple[str, str, dict]]:
     """术语 → (term, kind, entry)，按长度降序（长词优先）。
 
     必须先长后短：否则「销售额」会被同义词「金额」抢先命中，留下「销售」残渣。
+    有 pack_id 时走缓存索引（线上路径）；否则按传入的 pack 现算（评估会传入加工过的包）。
     """
+    if pack_id and load_pack(pack_id) is pack:
+        entries: list[dict] = []
+        entries.extend(pack.get("metrics", []))
+        entries.extend(pack.get("dimensions", []))
+        cached = _term_index_by_pack(pack_id)
+        return [(term, kind, entries[idx]) for term, kind, idx in cached]
+
     index: list[tuple[str, str, dict]] = []
     for m in pack.get("metrics", []):
         for t in {m.get("name", ""), *m.get("synonyms", [])}:
@@ -147,29 +182,46 @@ def _resolve_comparison(question: str) -> str:
 
 def _resolve_ranking(question: str) -> dict | None:
     top_n = None
+    matched_text = ""
     m = re.search(r"(?:top|前)\s*(\d+)", question, re.IGNORECASE)
     if m:
         top_n = int(m.group(1))
+        matched_text = m.group(0)
     else:
         # 「销售额最高的 5 家门店」这类中文 T+数字 表达：最高/最低 与数字之间允许夹字，
         # 但夹的字数要短，避免把「最高的门店，共 12 家」误判成 Top12。
         m2 = re.search(r"最[高低多少大小好坏长短快慢][^\d]{0,4}(\d+)", question)
         if m2:
             top_n = int(m2.group(1))
+            matched_text = m2.group(0)
         else:
             m3 = re.search(r"前([一二两三四五六七八九十]+)", question)
             if m3:
                 top_n = _CN_NUM.get(m3.group(1)[0], None)
+                matched_text = m3.group(0)
     lowered = question.lower()
-    if any(w in question for w in _RANK_DESC_WORDS) or "top" in lowered:
+    order_word = ""
+    for w in _RANK_DESC_WORDS:
+        if w in question:
+            order_word = w
+            break
+    if not order_word and "top" in lowered:
+        order_word = "top"
+    if order_word:
         order = "desc"
-    elif any(w in question for w in _RANK_ASC_WORDS):
-        order = "asc"
     else:
-        order = None
+        for w in _RANK_ASC_WORDS:
+            if w in question:
+                order = "asc"
+                order_word = w
+                break
+        else:
+            order = None
+    if not matched_text and order_word:
+        matched_text = order_word
     if top_n is None and order is None:
         return None
-    return {"top_n": top_n, "order": order}
+    return {"top_n": top_n, "order": order, "text": matched_text}
 
 
 def _infer_analysis_type(metrics, dimensions, time_info, comparison, ranking, question) -> str:
@@ -204,8 +256,15 @@ def _confidence(metrics, dimensions, time_info, comparison, ranking) -> float:
 
 # ---- 对外入口 ----
 
+def _matched_words(question: str, words: list[str]) -> list[str]:
+    return [w for w in words if w in question]
+
+
 def resolve(question: str, pack_id: str) -> dict:
     """把问题解析为语义包口径下的结构化意图（确定性、零 token）。
+
+    带缓存：同一 (问题, 语义包) 只真正解析一次（一次运行里 `resolve` 会被路由、
+    意图快路径、trace 各调一次），返回**副本**以避免调用方改写缓存。
 
     返回：
         pack          命中的语义包
@@ -213,21 +272,28 @@ def resolve(question: str, pack_id: str) -> dict:
         dimensions    [{name, field, optional, matched}]
         time          {} 或 {kind, value, unit, text, grain}
         comparison    none | yoy | mom
-        ranking       null 或 {top_n, order}
+        ranking       null 或 {top_n, order, text}
         analysis_type aggregate | breakdown | trend | ranking | yoy_comparison | mom_comparison
         matched_terms 命中的原始词面（用于解释与调试）
+        covered_spans 除术语外「有出处」的词面（时间 / 排序 / 对比 / 趋势 / 粒度），
+                      供意图快路径判断"问题是否全部被解释"
         confidence    启发式置信度 0~1
     """
+    return copy.deepcopy(_resolve_cached(question or "", pack_id or ""))
+
+
+@functools.lru_cache(maxsize=2048)
+def _resolve_cached(question: str, pack_id: str) -> dict:
     pack = load_pack(pack_id)
     empty = {
         "pack": pack_id, "metrics": [], "dimensions": [], "time": {},
         "comparison": "none", "ranking": None, "analysis_type": "unknown",
-        "matched_terms": [], "confidence": 0.0,
+        "matched_terms": [], "covered_spans": [], "confidence": 0.0,
     }
     if not pack or not question:
         return empty
 
-    hits = _match_terms(question, _term_index(pack))
+    hits = _match_terms(question, _term_index(pack, pack_id))
     metrics: list[dict] = []
     dimensions: list[dict] = []
     terms: list[str] = []
@@ -257,6 +323,21 @@ def resolve(question: str, pack_id: str) -> dict:
     analysis_type = _infer_analysis_type(metrics, dimensions, time_info,
                                          comparison, ranking, question)
 
+    # 「有出处」的词面：除术语本身，还包括解析器自己识别的时间 / 排序 / 对比 / 趋势 / 粒度表达。
+    # 意图快路径用它判断"这句话是否还有没被解释的内容"（见 backend/agent/intent.py）。
+    spans = list(terms)
+    if time_info.get("text"):
+        spans.append(str(time_info["text"]))
+    grain_word = _match_grain_word(question)
+    if grain_word:
+        spans.append(grain_word)
+    if ranking and ranking.get("text"):
+        spans.append(str(ranking["text"]))
+    spans += _matched_words(question, _YOY_WORDS if comparison == "yoy" else [])
+    spans += _matched_words(question, _MOM_WORDS if comparison == "mom" else [])
+    spans += _matched_words(question, _TREND_WORDS)
+    spans += _matched_words(question, _CHANGE_WORDS)
+
     return {
         "pack": pack_id,
         "metrics": metrics,
@@ -266,6 +347,7 @@ def resolve(question: str, pack_id: str) -> dict:
         "ranking": ranking,
         "analysis_type": analysis_type,
         "matched_terms": terms,
+        "covered_spans": sorted(set(spans) - set(terms)),
         "confidence": _confidence(metrics, dimensions, time_info, comparison, ranking),
     }
 
@@ -280,4 +362,15 @@ def resolve_for_packs(question: str, pack_ids: list[str]) -> dict:
     return best or resolve(question, "")
 
 
-__all__ = ["resolve", "resolve_for_packs"]
+def cache_stats() -> dict:
+    """解析缓存命中情况（`backend/analysis/cache.py` 汇总进 Run.trace）。"""
+    info = _resolve_cached.cache_info()
+    return {"hits": info.hits, "misses": info.misses, "size": info.currsize}
+
+
+def clear_cache() -> None:
+    _resolve_cached.cache_clear()
+    _term_index_by_pack.cache_clear()
+
+
+__all__ = ["cache_stats", "clear_cache", "resolve", "resolve_for_packs"]

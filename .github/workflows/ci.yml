@@ -86,6 +86,48 @@ jobs:
               sys.exit(1)
           PY
 
+      # Cost / Latency 门禁：离线基准（桩化 LLM/沙箱、驱动真实图谱）。
+      # 断言的是"优化确实更省，且没有牺牲正确性"：调用与 token 必须低于基线、
+      # 确定性耗时不劣化、意图快路径命中处与人工标注 100% 一致、重放仍然 0 LLM。
+      - name: Cost / Latency Benchmark (before vs after)
+        run: python -m backend.evaluation --cost-benchmark --json /tmp/cost.json
+      - name: Cost / Latency regression gate
+        run: |
+          python - <<'PY'
+          import json, sys
+          r = json.load(open('/tmp/cost.json'))
+          b, o = r['baseline'], r['optimized']
+          gate = next(g for g in r['intent_gate']['by_threshold']
+                      if abs(g['threshold'] - r['intent_gate']['shipped_threshold']) < 1e-9)
+          checks = [
+              ("基准自证非实测",
+               r['measured'] is False and r['mode'] == 'offline_simulation'),
+              ("LLM 调用低于基线",
+               o['llm_calls_per_agent_query'] < b['llm_calls_per_agent_query']),
+              ("输入 Token 低于基线",
+               o['input_tokens_per_agent_query'] < b['input_tokens_per_agent_query']),
+              ("生成上下文 Token 低于基线",
+               o['context_tokens_p50'] <= b['context_tokens_p50']),
+              ("确定性耗时未劣化",
+               o['deterministic_latency_ms']['p50_ms']
+               <= b['deterministic_latency_ms']['p50_ms'] * 1.05),
+              ("意图快路径覆盖率 ≥ 60%", gate['coverage'] >= 0.60),
+              ("意图快路径与标注 100% 一致", gate['strict_accuracy'] == 1.0),
+              ("预算耗尽时可解释且不编造结论",
+               r['budget_stress']['honest_answer_rate'] == 1.0),
+              ("Skill 重放仍为零 LLM",
+               r['replay_guard']['passed'] == r['replay_guard']['cases']),
+              ("重放与兜底路由未变",
+               o['replay_rate'] == b['replay_rate']),
+          ]
+          failed = [name for name, ok in checks if not ok]
+          for name, ok in checks:
+              print(f"[{'PASS' if ok else 'FAIL'}] {name}")
+          if failed:
+              print(f"成本/延迟门禁未通过：{failed}")
+              sys.exit(1)
+          PY
+
   frontend:
     runs-on: ubuntu-latest
     steps:

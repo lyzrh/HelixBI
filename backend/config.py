@@ -106,6 +106,63 @@ SKILL_ADMISSION_MARGIN = float(os.getenv("SKILL_ADMISSION_MARGIN", "0.03"))
 LLM_PRICE_INPUT_PER_MTOK = float(os.getenv("LLM_PRICE_INPUT_PER_MTOK", "0"))
 LLM_PRICE_OUTPUT_PER_MTOK = float(os.getenv("LLM_PRICE_OUTPUT_PER_MTOK", "0"))
 
+
+def _opt_int(name: str, default: str = "0") -> int | None:
+    """可选的整数限额：0 / 空 / 负数一律视为「不限制」（None）。"""
+    raw = (os.getenv(name, default) or "").strip()
+    try:
+        value = int(float(raw))
+    except ValueError:
+        return None
+    return value if value > 0 else None
+
+
+def _opt_float(name: str, default: str = "0") -> float | None:
+    raw = (os.getenv(name, default) or "").strip()
+    try:
+        value = float(raw)
+    except ValueError:
+        return None
+    return value if value > 0 else None
+
+
+# ---- LLM 运行预算（Cost & Latency Optimization V1）----
+#
+# 「达不到预算就停」而不是「算完再说」：预检在调用之前，超限的那次调用根本不发出。
+# 0 / 未配置 = 不限制（引入预算前的行为保持不变）；默认值给的是**宽松上限**，
+# 只拦病态循环（复读重试、超大 prompt 反复重发），不拦正常分析。
+MAX_LLM_CALLS_PER_RUN = _opt_int("MAX_LLM_CALLS_PER_RUN", "8")
+MAX_INPUT_TOKENS_PER_RUN = _opt_int("MAX_INPUT_TOKENS_PER_RUN", "40000")
+MAX_OUTPUT_TOKENS_PER_RUN = _opt_int("MAX_OUTPUT_TOKENS_PER_RUN", "12000")
+MAX_TOTAL_TOKENS_PER_RUN = _opt_int("MAX_TOTAL_TOKENS_PER_RUN", "60000")
+# 成本预算只有在配置了 LLM_PRICE_* 单价时才可判定（否则无法估算，按不限制处理）
+MAX_RUN_COST_USD = _opt_float("MAX_RUN_COST_USD", "0")
+# 修复次数的运行级收紧（0 = 跟随 MAX_FIX_ATTEMPTS；永远只可能更小，不会放大上限）
+MAX_REPAIR_ATTEMPTS = _opt_int("MAX_REPAIR_ATTEMPTS", "0")
+
+# ---- 成本 / 延迟优化开关 ----
+#
+# CONTEXT_POLICY=v1 是**冻结基线**（改造前的 prompt 装配：全量语义层 / 两例 few-shot /
+# 修复块重复注入文件清单），只为评估对照存在；线上默认 v2。
+CONTEXT_POLICY = os.getenv("CONTEXT_POLICY", "v2")
+# 意图解析：auto = 确定性解析满足门条件就不调 LLM；llm = 冻结的旧行为
+INTENT_MODE = os.getenv("INTENT_MODE", "auto")
+# 快路径最低置信度：0.60 = 命中指标 + 至少一个结构化信号（维度/时间/对比/排序）
+INTENT_FASTPATH_MIN_CONFIDENCE = float(os.getenv("INTENT_FASTPATH_MIN_CONFIDENCE", "0.60"))
+# 追问推荐：deterministic（0 次 LLM）| hybrid（凑不满才补 LLM）| llm（冻结基线）| off
+FOLLOWUP_MODE = os.getenv("FOLLOWUP_MODE", "hybrid")
+# 上下文裁剪参数（v2 生效；调大即更接近基线行为）
+HISTORY_TURNS = int(os.getenv("HISTORY_TURNS", "2"))
+HISTORY_ANSWER_CHARS = int(os.getenv("HISTORY_ANSWER_CHARS", "300"))
+SKILL_FEWSHOT_MAX = int(os.getenv("SKILL_FEWSHOT_MAX", "1"))
+SKILL_EXAMPLE_MAX_LINES = int(os.getenv("SKILL_EXAMPLE_MAX_LINES", "60"))
+REPAIR_OUTPUT_CHARS = int(os.getenv("REPAIR_OUTPUT_CHARS", "1500"))
+SUMMARIZE_TABLE_ROWS = int(os.getenv("SUMMARIZE_TABLE_ROWS", "30"))
+# 数据画像缓存（按文件指纹失效；关掉则每次重新读盘）
+PROFILE_CACHE_ENABLED = (os.getenv("PROFILE_CACHE_ENABLED", "1").strip().lower()
+                         not in ("0", "false", "no", "off"))
+
+
 # ---- 安全（Security Hardening V1）----
 #
 # 三类密钥都只从环境变量读，**不写进数据库、不写进 Git**：
@@ -154,15 +211,21 @@ UPLOADS_DIR.mkdir(parents=True, exist_ok=True)
 RUNS_DIR.mkdir(parents=True, exist_ok=True)
 
 __all__ = [
-    "ACCESS_TOKEN_TTL_SECONDS", "CODE_TIMEOUT_SECONDS", "DATA_DIR", "DB_PATH",
-    "ENV_NAME", "ENV_PATH", "FRONTEND_DIST", "IS_PRODUCTION",
+    "ACCESS_TOKEN_TTL_SECONDS", "CODE_TIMEOUT_SECONDS", "CONTEXT_POLICY", "DATA_DIR",
+    "DB_PATH", "ENV_NAME", "ENV_PATH", "FOLLOWUP_MODE", "FRONTEND_DIST",
+    "HISTORY_ANSWER_CHARS", "HISTORY_TURNS", "INTENT_FASTPATH_MIN_CONFIDENCE",
+    "INTENT_MODE", "IS_PRODUCTION",
     "LLM_PRICE_INPUT_PER_MTOK", "LLM_PRICE_OUTPUT_PER_MTOK",
     "LLM_TEMPERATURE", "MATERIALIZED_DIR", "MATERIALIZED_MAX_ROWS",
-    "MATERIALIZED_TTL_HOURS", "MAX_FIX_ATTEMPTS", "MAX_UPLOAD_MB", "MODEL_NAME",
-    "OPENAI_API_KEY", "OPENAI_BASE_URL", "PROJECT_ROOT", "REFRESH_TOKEN_TTL_SECONDS",
-    "REPAIR_POLICY", "REPAIR_REPEAT_LIMIT", "RUNS_DIR", "SECRET_KEY",
+    "MATERIALIZED_TTL_HOURS", "MAX_FIX_ATTEMPTS", "MAX_INPUT_TOKENS_PER_RUN",
+    "MAX_LLM_CALLS_PER_RUN", "MAX_OUTPUT_TOKENS_PER_RUN", "MAX_REPAIR_ATTEMPTS",
+    "MAX_RUN_COST_USD", "MAX_TOTAL_TOKENS_PER_RUN", "MAX_UPLOAD_MB", "MODEL_NAME",
+    "OPENAI_API_KEY", "OPENAI_BASE_URL", "PROFILE_CACHE_ENABLED", "PROJECT_ROOT",
+    "REFRESH_TOKEN_TTL_SECONDS", "REPAIR_OUTPUT_CHARS", "REPAIR_POLICY",
+    "REPAIR_REPEAT_LIMIT", "RUNS_DIR", "SECRET_KEY",
     "SANDBOX_CPUS", "SANDBOX_IMAGE", "SANDBOX_MEMORY", "SEMANTIC_PACKS_DIR",
     "SKILL_ADMISSION_HIGH", "SKILL_ADMISSION_LOW", "SKILL_ADMISSION_MARGIN",
+    "SKILL_EXAMPLE_MAX_LINES", "SKILL_FEWSHOT_MAX",
     "SKILL_RETRIEVAL_MIN_SCORE", "SKILL_RETRIEVAL_TOP_K", "SKILL_RETRIEVAL_WEIGHTS",
-    "UPLOADS_DIR", "update_llm_config",
+    "SUMMARIZE_TABLE_ROWS", "UPLOADS_DIR", "update_llm_config",
 ]

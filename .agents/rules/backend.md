@@ -34,6 +34,13 @@
 - Token 纪律：Skill 重放不经过 LLM；连接测试只发 `max_tokens=1` 探测；洞察诊断等批量任务注意控制上下文长度。
   自修复 V2 同样**不新增 LLM 调用**——失败时只是把同一次生成调用的提示换成按错误类别定制的处方
   （`agent/repair.py::STRATEGIES`），复读或额度用尽则直接停止重试。
+- **成本纪律**（Cost & Latency Optimization V1）：所有 LLM 调用必须经
+  `agent/graph.py::_guarded_invoke`（预检预算 → 调用 → 记账），不允许在节点里直接 `llm.invoke`；
+  prompt 一律由 `agent/context.py` 装配（它同时产出分块 token 记账），不要在各节点手拼上下文；
+  省调用的三条合法路径是"确定性意图快路径 / Skill 重放 / 确定性追问"，**不要用放宽解析门槛的方式省钱**。
+- **缓存纪律**：确定性缓存必须登记在 `analysis/cache.py::describe()`，key 要包含能区分数据归属的维度
+  （workspace / 文件指纹 / Skill 更新时间），且**只缓存数据与配置类派生结果**——权限、可见性、
+  准入结论一律不缓存（`tests/test_cache_isolation.py` 会拦住）。
 - 新增依赖先确认必要性，写入 `requirements.txt`；不要引入重量级框架替换现有 LangGraph 链路。
 - 新增 / 移动领域目录、改动认证与权限行为时，同一次提交里同步更新 `AGENTS.md` 架构地图、`.agents/rules/` 与 `docs/api.md`。
 
@@ -50,7 +57,7 @@ pytest -q
 
 改动认证 / 权限 / 工作区隔离时，额外跑 `pytest tests/test_auth_rbac.py -q` 并补对应 Case。
 
-改了语义解析 / Skill 匹配 / 沙箱链路等影响指标的行为时，额外跑 `python -m backend.evaluation` 看 Evaluation Report（见 `.agents/rules/architecture.md` 的指标门禁条目）。
+改了语义解析 / Skill 匹配 / 沙箱链路等影响指标的行为时，额外跑 `python -m backend.evaluation` 看 Evaluation Report（报告已含 Self-Repair 与 Cost & Latency 两段）（见 `.agents/rules/architecture.md` 的指标门禁条目）。
 
 改了 Skill 检索 / 重放准入后，还要跑 `python -m backend.evaluation --benchmark`：False Replay 必须仍为 0，
 Replay Precision 不得低于基线（`tests/evaluation/test_retrieval_gate.py` 会拦住回归）。
@@ -59,5 +66,12 @@ Replay Precision 不得低于基线（`tests/evaluation/test_retrieval_gate.py` 
 （离线策略仿真，`measured=false`）与 `pytest tests/test_self_repair_loop.py tests/test_repair_strategy.py -q`；
 `tests/evaluation/test_self_repair_eval.py` 会拦住成功率回退、上限被放大、场景期望不一致等回归。
 有 Docker + LLM 时另跑 `--repair-benchmark --repair-live` 采集真实指标（缺资源时如实 skipped）。
+
+改了意图快路径 / 上下文装配 / 预算 / 缓存等成本相关行为后，跑
+`python -m backend.evaluation --cost-benchmark`（离线，桩化 LLM 与沙箱；调用次数与 prompt token 是实测，
+LLM/沙箱耗时是投影）与 `pytest tests/test_cost_routing.py tests/test_llm_budget.py tests/test_context_assembly.py tests/test_cache_isolation.py -q`；
+`tests/evaluation/test_cost_benchmark.py` 会拦住"调用与 token 没降""快路径命中处与人工标注不一致"
+"确定性耗时劣化""重放不再是零 LLM"等回归。**默认（零配置）预算只拦病态循环**：
+新增预算项时保持"0 / 留空 = 不限制"，不要把正常分析掐掉。
 新增准入约束时同时补一条对抗样例到 `backend/evaluation/datasets/admission/`，
 否则这类误重放没有回归保护。

@@ -8,6 +8,17 @@
   → 通过验收则 summarize，否则以结构化失败收尾。
 
 分类与决策全部确定性、零 token（不新增 LLM 调用），实现见 `backend/agent/repair.py`。
+
+成本与延迟（Cost & Latency Optimization V1）在这一层加了四件事，都是为了"少花不该花的"：
+
+1. **意图快路径**（`intent.py`）：确定性解析满足门条件时**跳过 `parse_intent` 的 LLM 调用**；
+2. **上下文装配器**（`context.py`）：按命中口径收窄语义层、去重、few-shot 限流，
+   并把每块 token 记账写进 trace；
+3. **运行预算**（`budget.py`）：调用前预检，超预算不发请求，终止原因进 trace；
+4. **确定性追问**（`followups.py`）：追问推荐不再默认调用 LLM。
+
+四件事都可通过 `config` 关掉（`INTENT_MODE=llm` / `CONTEXT_POLICY=v1` /
+`FOLLOWUP_MODE=llm` / 预算留空），关掉后行为与改造前一致。
 """
 
 import json
@@ -24,8 +35,13 @@ from langgraph.graph import END, StateGraph
 from backend import config
 from backend.config import MAX_FIX_ATTEMPTS
 
+from . import budget as budget_mod
+from . import context as context_mod
+from . import followups as followups_mod
+from . import intent as intent_mod
 from . import prompts
 from . import repair as repair_mod
+from . import tokens as token_mod
 from .acceptance import acceptance_gate
 from .profiler import profile_all
 from .sandbox import SandboxResult, run_in_sandbox
@@ -158,6 +174,97 @@ def _log_token_usage(state: "AgentState", node: str, response: Any) -> None:
         pass  # token 追踪失败不应影响主流程
 
 
+# ---- 受预算约束的 LLM 调用（成本优化的唯一入口）----
+#
+# 所有 LLM 调用都必须经过 `_guarded_invoke`，这样"预算"才是真约束而不是事后统计：
+# 它在**调用前**用本地计数判断还够不够（`tokens.count_messages`），够才发请求。
+# 用量优先取 provider 返回值；provider 未返回 usage 时退回本地估算并标注来源，
+# 让 `Run.trace.cost_control` 里的数字既可用又诚实。
+
+def _budget_of(state: "AgentState") -> tuple[budget_mod.RunBudget, budget_mod.BudgetState]:
+    limit = state.get("budget_limit") or {}
+    budget = budget_mod.RunBudget(
+        max_llm_calls=limit.get("max_llm_calls"),
+        max_input_tokens=limit.get("max_input_tokens"),
+        max_output_tokens=limit.get("max_output_tokens"),
+        max_total_tokens=limit.get("max_total_tokens"),
+        max_cost_usd=limit.get("max_cost_usd"),
+        max_repair_attempts=limit.get("max_repair_attempts"),
+    )
+    return budget, budget_mod.state_from_dict(state.get("budget_used"))
+
+
+def _guarded_invoke(state: "AgentState", node: str, messages: list):
+    """受预算约束的一次 LLM 调用 → `(response | None, state update)`。
+
+    `response is None` 表示**这次调用被预算拦下**（UPDATE 里带终止原因），
+    调用方必须走确定性兜底，不允许伪造结果。
+    """
+    budget, used = _budget_of(state)
+    estimated_input = token_mod.count_messages(messages)
+    decision = budget_mod.precheck(budget, used, node, estimated_input)
+    if not decision.allowed:
+        budget_mod.note_denied(used, node, decision)
+        logger.info("预算拦下 LLM 调用：%s（%s）", node, decision.reason_code)
+        return None, {"budget_used": used.to_dict(),
+                      "termination_reason": decision.reason_code,
+                      "budget_blocked_node": node,
+                      "budget_reason": decision.reason}
+
+    response = get_llm().invoke(messages)
+    input_tok, output_tok, cost = _extract_usage(response)
+    usage_source = "provider"
+    if input_tok + output_tok == 0:
+        # provider 没给 usage：用本地计数兜住登记（口径标注为估算，不冒充计费值）
+        input_tok, output_tok, cost = estimated_input, 0, 0.0
+        usage_source = "estimated"
+    _log_token_usage(state, node, response)
+
+    used.llm_calls += 1
+    used.input_tokens += input_tok
+    used.output_tokens += output_tok
+    used.cost_usd += cost
+    post = budget_mod.postcheck(budget, used, node)
+    update: dict[str, Any] = {
+        "budget_used": used.to_dict(),
+        "budget_estimated_input_tokens": estimated_input,
+        "budget_usage_source": usage_source,
+    }
+    if not post.allowed:
+        used.termination_reason = post.reason_code
+        update["budget_used"] = used.to_dict()
+        update["termination_reason"] = post.reason_code
+        update["budget_reason"] = post.reason
+    return response, update
+
+
+def _deterministic_answer(state: "AgentState", reason: str) -> str:
+    """无 LLM 的兜底结论：只说**已经真实发生**的事，绝不编造数字。"""
+    execution = state.get("execution") or {}
+    gate = acceptance_gate(execution)
+    lines = [
+        f"本次分析未能给出结论：{reason}",
+        "",
+        f"- 代码执行：{'成功' if execution.get('ok') else '失败'}"
+        f"（共 {state.get('attempts', 0) or 0} 次）",
+        f"- 结果验收：{'通过' if gate['passed'] else '未通过'}"
+        + (f"（未通过项：{'、'.join(gate.get('failed') or [])}）" if gate.get("failed") else ""),
+    ]
+    tables = execution.get("tables") or {}
+    if tables:
+        sizes = "、".join(f"{name}({len(rows)} 行)" if isinstance(rows, list) else str(name)
+                          for name, rows in list(tables.items())[:3])
+        lines.append(f"- 已产出的结果表：{sizes}（原始数据可在下方执行日志中查看）")
+    if execution.get("text"):
+        lines.append(f"- 沙箱内生成的说明文字：{str(execution['text'])[:300]}")
+    if not execution.get("ok") and execution.get("stderr"):
+        lines.append(f"- 错误摘要：{str(execution['stderr'])[-300:]}")
+    lines.append("")
+    lines.append("说明：本轮达到运行预算上限（或未配置可用模型），因此跳过了 LLM 结论整理；"
+                 "以上内容全部来自沙箱的真实执行结果，未经任何改写。")
+    return "\n".join(lines)
+
+
 def get_llm() -> ChatOpenAI:
     """LLM 单例。动态读取 config（运行时可在设置页修改并 reset_llm）。"""
     global _llm
@@ -185,7 +292,7 @@ class AgentState(TypedDict):
     question: str
     files: dict[str, str]  # 真实存储文件名（含扩展名）-> host path
     profile: str
-    semantic_block: str  # 行业语义层 prompt 块
+    semantic_block: str  # 行业语义层 prompt 块（意图解析用的**全量**块）
     skill_block: str  # Skill few-shot 注入块（空字符串时行为与原版完全一致）
     spec: dict  # QuerySpec：意图理解结果（UI 可人工确认/修正）
     history: list[dict[str, str]]  # prior Q&A for follow-up turns
@@ -212,19 +319,33 @@ class AgentState(TypedDict):
     repair_repeat_kind: str     # "" | identical | equivalent（复读类型）
     previous_errors: list[dict]  # 历史失败序列（类别 / 指纹 / 触发它的策略）
     repair_history: list[dict]   # 每次修复的耗时与结果（观测"修了多久、修完变成什么错"）
+    # ---- Cost & Latency V1 state（全部是新增字段，缺省即退化为改造前行为）----
+    semantic_packs: list[str]    # 本次用的语义包 id（上下文装配器据此按命中口径收窄）
+    skill_candidates: list       # few-shot 候选（由路由阶段的候选直接复用，避免重复检索）
+    context_policy: str          # "v2"（默认）| "v1"（冻结的 prompt 装配基线）
+    budget_limit: dict           # 运行预算上限（None 表示不限制）
+    budget_used: dict            # 已用量 + 终止原因（trace.cost_control 直接读它）
+    budget_blocked_node: str     # 最近一次被预算拦下的节点
+    budget_reason: str           # 拦下的可读原因
+    budget_usage_source: str     # provider | estimated（用量来源，诚实标注）
+    budget_estimated_input_tokens: int  # 最近一次调用的本地预估输入 token
+    termination_reason: str      # 整轮终止原因（"" = 正常结束）
+    intent_source: str           # deterministic | llm | predefined | budget_fallback
+    intent_meta: dict            # 快路径判定依据（置信度 / 未覆盖内容 / 原因）
+    followup_source: str         # deterministic | llm | off | budget
+    summarize_source: str        # llm | deterministic（预算拦下结论整理时走确定性兜底）
+    generate_blocked: bool       # 生成本身被预算拦下（没有新代码可执行）
+    context_stats: dict          # 各节点最后一次装配的分块 token 记账
 
 
 
-def _history_block(history: list[dict[str, str]] | None) -> str:
-    """Compact prior Q&A context so follow-up questions keep continuity."""
-    if not history:
-        return ""
-    turns = history[-3:]
-    lines = ["## 之前的对话（供参考，新问题可能延续这些结论）"]
-    for turn in turns:
-        answer = (turn.get("answer") or "").strip()
-        lines.append(f"- 问：{turn.get('question', '')}\n  答要旨：{answer[:600]}")
-    return "\n".join(lines) + "\n"
+def _history_block(history: list[dict[str, str]] | None,
+                   policy: str | None = None) -> str:
+    """Compact prior Q&A context so follow-up questions keep continuity.
+
+    轮次与摘要长度由上下文策略决定（v1 = 改造前的 3 轮 × 600 字；v2 = 2 轮 × 300 字）。
+    """
+    return context_mod.history_block(history, context_mod.resolve_policy(policy)).text
 
 
 def _extract_code(text: str) -> str:
@@ -243,47 +364,87 @@ def _parse_spec_json(content: str) -> dict | None:
         return None
 
 
+def _intent_pack(state: "AgentState") -> str:
+    """意图解析用的语义包：优先本次实际挂载的包，其次留空（不做快路径）。"""
+    for pack in (state.get("semantic_packs") or []):
+        if pack:
+            return str(pack)
+    return ""
+
+
 def parse_intent(state: AgentState) -> dict:
-    """意图理解：问题 + 语义层 + 对话上下文 → QuerySpec（FineChatBI 式语义解析）。"""
+    """意图理解：问题 + 语义层 + 对话上下文 → QuerySpec（FineChatBI 式语义解析）。
+
+    **成本优化**：先用确定性解析器试一次（零 token）。命中安全门
+    （置信度达标 + 问题内容全部有出处）就直接产出 QuerySpec，跳过这次 LLM 调用；
+    只要有解释不了的内容就回落 LLM——这一点是正确性底线（取值过滤这类意图
+    确定性解析识别不了，硬猜会把"筛选华东"变成"按区域分组"）。
+    """
     if state.get("spec"):
-        return {}  # UI 人工确认过，跳过
+        return {"intent_source": "predefined",
+                "intent_meta": {"reason": "UI 已确认 QuerySpec，跳过意图解析"}}
+
+    pack_id = _intent_pack(state)
+    if pack_id:
+        spec, meta = intent_mod.deterministic_intent(state["question"], pack_id)
+        if meta.get("eligible"):
+            return {"spec": spec, "intent_source": "deterministic", "intent_meta": meta}
+    else:
+        meta = {"eligible": False, "reason_code": "no_semantic_pack",
+                "reason": "本次没有可用语义包，跳过确定性快路径"}
+
     try:
-        llm = get_llm()
         human = (
-            _history_block(state.get("history"))
+            _history_block(state.get("history"), state.get("context_policy"))
             + f"{state.get('semantic_block', '')}\n\n## 用户问题\n{state['question']}"
         )
-        response = llm.invoke(
-            [
-                SystemMessage(content=prompts.PARSE_SYSTEM),
-                HumanMessage(content=human),
-            ]
-        )
+        messages = [
+            SystemMessage(content=prompts.PARSE_SYSTEM),
+            HumanMessage(content=human),
+        ]
+        response, update = _guarded_invoke(state, "parse_intent", messages)
+        if response is None:
+            # 预算拦下解析：用确定性结果兜底（有指标就用，没有就原问题直通），
+            # 不做"跳过解析直接生成"之外的任何猜测
+            fallback, _ = intent_mod.deterministic_intent(state["question"], pack_id) \
+                if pack_id else ({}, {})
+            spec = fallback or {"rewritten_question": state["question"]}
+            update.update({"spec": spec, "intent_source": "budget_fallback",
+                           "intent_meta": {**meta, "reason_code": "budget_blocked",
+                                           "reason": update.get("budget_reason", "")}})
+            return update
+
         content = response.content if isinstance(response.content, str) else str(response.content)
         spec = _parse_spec_json(content)
         if spec is None:
             logger.warning("parse_intent 输出不是合法 JSON，尝试修复重试")
-            response = llm.invoke(
-                [
-                    SystemMessage(content=prompts.PARSE_SYSTEM),
-                    HumanMessage(
-                        content=human
-                        + f"\n\n## 上次输出（不是合法 JSON）\n{content[:2000]}\n\n"
-                        "请重新输出：只输出合法 JSON，不要任何其他文字。"
-                    ),
-                ]
-            )
-            content = response.content if isinstance(response.content, str) else str(response.content)
-            spec = _parse_spec_json(content)
+            retry_messages = [
+                SystemMessage(content=prompts.PARSE_SYSTEM),
+                HumanMessage(
+                    content=human
+                    + f"\n\n## 上次输出（不是合法 JSON）\n{content[:2000]}\n\n"
+                    "请重新输出：只输出合法 JSON，不要任何其他文字。"
+                ),
+            ]
+            retry_response, retry_update = _guarded_invoke(state, "parse_intent", retry_messages)
+            update = retry_update or update
+            if retry_response is not None:
+                content = (retry_response.content if isinstance(retry_response.content, str)
+                           else str(retry_response.content))
+                spec = _parse_spec_json(content)
         if spec is None:
             logger.warning("parse_intent JSON 修复重试仍失败，回退为原始问题")
             spec = {}
         spec.setdefault("rewritten_question", state["question"])
-        _log_token_usage(state, "parse_intent", response)
-        return {"spec": spec}
+        spec.setdefault("source", "llm")
+        update.update({"spec": spec, "intent_source": "llm", "intent_meta": meta})
+        return update
     except Exception as exc:
         logger.warning("parse_intent 失败，回退为原始问题: %s", exc)
-        return {"spec": {"rewritten_question": state["question"]}}
+        return {"spec": {"rewritten_question": state["question"], "source": "fallback"},
+                "intent_source": "fallback",
+                "intent_meta": {**meta, "reason_code": "llm_error", "reason": str(exc)[:200]}}
+
 
 
 def _repair_policy(state: AgentState) -> repair_mod.RepairPolicy:
@@ -300,55 +461,44 @@ def _repair_policy(state: AgentState) -> repair_mod.RepairPolicy:
     )
 
 
-def _repair_hint(state: AgentState) -> str:
-    """本次修复要注入的处方：V2 按错误类别定制，V1 用冻结的统一提示。"""
-    hint = (state.get("repair_hint") or "").strip()
-    if hint:
-        return hint
-    if _repair_policy(state).is_legacy:
-        return repair_mod.LEGACY_UNIFORM_HINT
-    category = state.get("error_category") or repair_mod.CATEGORY_UNKNOWN
-    return repair_mod.strategy_for(category).hint
-
-
 def generate_code(state: AgentState) -> dict:
+    """生成分析代码。
+
+    **成本优化**：prompt 由上下文装配器统一拼装（按命中口径收窄语义层、去掉重复注入、
+    few-shot 限流），分块 token 记账进 state；调用本身受运行预算约束——预算不足时
+    **不发请求**，把状态标成"生成被拦下"，由路由直接收尾（结构化失败，不编造结果）。
+    """
     files = state["files"]
-    from backend.semantic import render_spec_prompt
+    policy = context_mod.resolve_policy(state.get("context_policy"))
+    assembly = context_mod.generation_context(state, policy)
+    base = assembly.text
+    stats = {"generation": assembly.stats()}
 
     messages = [
         SystemMessage(content=prompts.GENERATE_SYSTEM
                        + _pref_block("generate", _state_user_id(state))),
-        HumanMessage(
-            content=_history_block(state.get("history"))
-            + state.get("semantic_block", "")
-            + state.get("skill_block", "")
-            + "\n\n"
-            + render_spec_prompt(state.get("spec"))
-            + "\n\n"
-            + prompts.generate_user_prompt(
-                state["question"], state["profile"], list(files)
-            )
-        ),
+        HumanMessage(content=base),
     ]
     if state["attempts"] > 0:
-        execution = state["execution"]
-        messages.append(
-            HumanMessage(
-                content=prompts.repair_user_prompt(
-                    code=state["code"],
-                    stdout=execution.get("stdout", ""),
-                    stderr=execution.get("stderr", ""),
-                    files_block=prompts.file_list_block(list(files)),
-                    repair_hint=_repair_hint(state),
-                    previous_errors=state.get("previous_errors") or [],
-                )
-            )
-        )
-    llm = get_llm()
-    response = llm.invoke(messages)
+        repair = context_mod.repair_context(state, policy)
+        stats["repair"] = repair.stats()
+        messages.append(HumanMessage(content=repair.text))
+
+    response, update = _guarded_invoke(state, "generate_code", messages)
+    update["context_stats"] = stats
+    if response is None:
+        # 生成被预算拦下：保留上一轮代码（如果有），标记"本轮未产生新代码"
+        update.update({
+            "generate_blocked": True,
+            "repair_status": repair_mod.STATUS_EXHAUSTED,
+            "repair_reason": f"生成被预算拦下：{update.get('budget_reason', '')}",
+        })
+        return update
     content = response.content if isinstance(response.content, str) else str(response.content)
-    _log_token_usage(state, "generate_code", response)
-    return {"plan": content.split("```")[0].strip(), "code": _extract_code(content)}
+    update.update({"plan": content.split("```")[0].strip(), "code": _extract_code(content),
+                   "generate_blocked": False})
+    return update
+
 
 
 def execute(state: AgentState) -> dict:
@@ -477,79 +627,73 @@ def route_after_classify(state: AgentState) -> str:
     return "summarize"
 
 
-def _repair_block(state: AgentState) -> str:
-    """给 summarize 的自修复上下文：只在真的修过 / 失败时才注入（不给省 token 的轮次加料）。"""
-    attempts = state.get("attempts", 0) or 0
-    status = state.get("repair_status") or repair_mod.STATUS_NOT_NEEDED
-    if attempts <= 1 and status == repair_mod.STATUS_NOT_NEEDED:
-        return ""
-    category = state.get("error_category") or repair_mod.CATEGORY_UNKNOWN
-    label = repair_mod.CATEGORY_LABELS.get(category, category)
-    lines = [
-        "\n\n## 自修复过程（若最终失败，请如实说明修了几次、每轮错在哪，不要编造数字）",
-        f"- 代码执行 {attempts} 次，发起修复 {state.get('repair_attempt', 0)} 次"
-        f"（上限 MAX_FIX_ATTEMPTS={MAX_FIX_ATTEMPTS}）",
-        f"- 最终状态：{status}；最近错误类别：{label}（{category}）",
-        f"- 决策原因：{state.get('repair_reason') or '-'}",
-    ]
-    errors = state.get("previous_errors") or []
-    if errors:
-        chain = " → ".join(e.get("label") or e.get("category", "") for e in errors)
-        lines.append(f"- 错误序列：{chain}")
-    return "\n".join(lines)
-
-
 def summarize(state: AgentState) -> dict:
-    execution = state["execution"]
-    result_json = {
-        k: execution.get(k)
-        for k in ("ok", "text", "tables", "charts")
-    }
-    llm = get_llm()
-    response = llm.invoke(
-        [
-            SystemMessage(content=prompts.SUMMARIZE_SYSTEM
-                       + _pref_block("summarize", _state_user_id(state))),
-            HumanMessage(
-                content=f"## 用户问题\n{state['question']}\n\n## 执行结果\n"
-                f"```json\n{result_json}\n```\n\n## stderr（若失败）\n"
-                f"{execution.get('stderr', '')[-1500:]}"
-                + _repair_block(state)
-            ),
-        ]
-    )
+    """整理结论。装配走上下文装配器（结果表按行数收敛、真实数字不变）；
+    预算不足时不发请求，改用**只陈述真实执行结果**的确定性结论。"""
+    policy = context_mod.resolve_policy(state.get("context_policy"))
+    assembly = context_mod.summarize_context(state, policy)
+    messages = [
+        SystemMessage(content=prompts.SUMMARIZE_SYSTEM
+                      + _pref_block("summarize", _state_user_id(state))),
+        HumanMessage(content=assembly.text),
+    ]
+    response, update = _guarded_invoke(state, "summarize", messages)
+    update["context_stats"] = {**(state.get("context_stats") or {}),
+                               "summarize": assembly.stats()}
+    if response is None:
+        update["answer"] = _deterministic_answer(
+            state, update.get("budget_reason") or "达到运行预算上限，已跳过结论整理")
+        update["summarize_source"] = "deterministic"
+        return update
     content = response.content if isinstance(response.content, str) else str(response.content)
-    _log_token_usage(state, "summarize", response)
-    return {"answer": content}
+    update.update({"answer": content, "summarize_source": "llm"})
+    return update
 
 
 def suggest_followups(state: AgentState) -> dict:
-    """Suggest next questions from the result (Vanna's followup-questions idea)."""
+    """推荐追问：默认由 QuerySpec 确定性生成（0 次 LLM），只有凑不满时才补一次 LLM。"""
     execution = state["execution"]
     if not execution.get("ok"):
-        return {"followups": []}
+        return {"followups": [], "followup_source": "skipped"}
     if not _get_prefs(_state_user_id(state)).get("followups_enabled", True):
-        return {"followups": []}
+        return {"followups": [], "followup_source": "disabled"}
+
+    mode = getattr(config, "FOLLOWUP_MODE", followups_mod.MODE_HYBRID)
+    candidates, needs_llm = followups_mod.plan_followups(
+        state["question"], state.get("spec") or {},
+        pack_id=_intent_pack(state) or None, mode=mode)
+    if not needs_llm:
+        return {"followups": candidates,
+                "followup_source": ("off" if str(mode).lower() == followups_mod.MODE_OFF
+                                    else "deterministic")}
+
+    assembly = context_mod.followup_context(state)
+    messages = [
+        SystemMessage(content=prompts.FOLLOWUP_SYSTEM),
+        HumanMessage(content=assembly.text),
+    ]
     try:
-        llm = get_llm()
-        response = llm.invoke(
-            [
-                SystemMessage(content=prompts.FOLLOWUP_SYSTEM),
-                HumanMessage(
-                    content=f"## 用户问题\n{state['question']}\n\n## 分析结论\n"
-                    f"{state['answer'][:800]}\n\n## 数据概况摘要\n"
-                    f"{state['profile'][:600]}"
-                ),
-            ]
-        )
-        content = response.content if isinstance(response.content, str) else str(response.content)
-        _log_token_usage(state, "followup", response)
-        questions = [
-            q.strip().lstrip("0123456789.、-）) ") for q in content.splitlines() if q.strip()
-        ][:3]
-        return {"followups": [q for q in questions if len(q) >= 4]}
+        response, update = _guarded_invoke(state, "followup", messages)
     except Exception:
-        return {"followups": []}
+        return {"followups": candidates, "followup_source": "deterministic"}
+    update["context_stats"] = {**(state.get("context_stats") or {}),
+                               "followup": assembly.stats()}
+    if response is None:
+        # 预算拦下补问：确定性候选就是最终答案（不降级为"没有追问"）
+        update.update({"followups": candidates,
+                       "followup_source": "budget" if candidates else "budget_empty"})
+        return update
+    content = response.content if isinstance(response.content, str) else str(response.content)
+    questions = [
+        q.strip().lstrip("0123456789.、-）) ") for q in content.splitlines() if q.strip()
+    ][:3]
+    questions = [q for q in questions if len(q) >= 4]
+    return {**update, "followups": questions or candidates, "followup_source": "llm"}
+
+
+def route_after_generate(state: AgentState) -> str:
+    """生成被预算拦下时不再执行（没有新代码可跑），直接收尾给结构化结论。"""
+    return "summarize" if state.get("generate_blocked") else "execute"
 
 
 def build_graph():
@@ -562,7 +706,8 @@ def build_graph():
     graph.add_node("suggest_followups", suggest_followups)
     graph.set_entry_point("parse_intent")
     graph.add_edge("parse_intent", "generate_code")
-    graph.add_edge("generate_code", "execute")
+    # generate_code → execute：唯一的分支点是"预算拦下生成"（没有新代码可执行）
+    graph.add_conditional_edges("generate_code", route_after_generate)
     # execute → classify：分类 + 验收门 + 有界重试决策（仍然是线性流程，无 tool-calling）
     graph.add_edge("execute", "classify")
     graph.add_conditional_edges("classify", route_after_classify)
@@ -592,11 +737,18 @@ def _initial_state(
     session_id: int | None = None,
     user_context: dict | None = None,
     repair_policy: str | None = None,
+    semantic_packs: list[str] | None = None,
+    skill_candidates: list | None = None,
+    context_policy: str | None = None,
+    budget_overrides: dict | None = None,
 ) -> AgentState:
+    workspace_id = (user_context or {}).get("workspace_id")
     return {
         "question": question,
         "files": files,
-        "profile": profile_all(files),
+        # 画像按文件指纹 + 工作区缓存：同一批数据重复分析不再重复读盘
+        "profile": profile_all(files, workspace_id=workspace_id,
+                               use_cache=getattr(config, "PROFILE_CACHE_ENABLED", True)),
         "semantic_block": semantic_block,
         "skill_block": skill_block,
         "spec": spec or {},
@@ -622,6 +774,23 @@ def _initial_state(
         "repair_repeat_kind": "",
         "previous_errors": [],
         "repair_history": [],
+        # Cost & Latency V1：新增字段（默认值 = 改造前行为）
+        "semantic_packs": list(semantic_packs or []),
+        "skill_candidates": list(skill_candidates or []),
+        "context_policy": context_mod.resolve_policy(context_policy),
+        "budget_limit": budget_mod.budget_from_config(budget_overrides).to_dict(),
+        "budget_used": budget_mod.BudgetState().to_dict(),
+        "budget_blocked_node": "",
+        "budget_reason": "",
+        "budget_usage_source": "",
+        "budget_estimated_input_tokens": 0,
+        "termination_reason": "",
+        "intent_source": "",
+        "intent_meta": {},
+        "followup_source": "",
+        "summarize_source": "",
+        "generate_blocked": False,
+        "context_stats": {},
     }
 
 
@@ -636,11 +805,19 @@ def run_analysis(
     session_id: int | None = None,
     user_context: dict | None = None,
     repair_policy: str | None = None,
+    semantic_packs: list[str] | None = None,
+    skill_candidates: list | None = None,
+    context_policy: str | None = None,
+    budget_overrides: dict | None = None,
 ) -> AgentState:
     app = build_graph()
     initial = _initial_state(question, files, history, spec, semantic_block, skill_block,
                              run_id=run_id, session_id=session_id,
-                             user_context=user_context, repair_policy=repair_policy)
+                             user_context=user_context, repair_policy=repair_policy,
+                             semantic_packs=semantic_packs,
+                             skill_candidates=skill_candidates,
+                             context_policy=context_policy,
+                             budget_overrides=budget_overrides)
     return app.invoke(initial)
 
 
@@ -655,13 +832,21 @@ def stream_analysis(
     session_id: int | None = None,
     user_context: dict | None = None,
     repair_policy: str | None = None,
+    semantic_packs: list[str] | None = None,
+    skill_candidates: list | None = None,
+    context_policy: str | None = None,
+    budget_overrides: dict | None = None,
 ):
     """Run the graph yielding (node, delta, merged_state) after every node,
     so the UI can render DB-GPT-style live steps while the agent works."""
     app = build_graph()
     initial = _initial_state(question, files, history, spec, semantic_block, skill_block,
                              run_id=run_id, session_id=session_id,
-                             user_context=user_context, repair_policy=repair_policy)
+                             user_context=user_context, repair_policy=repair_policy,
+                             semantic_packs=semantic_packs,
+                             skill_candidates=skill_candidates,
+                             context_policy=context_policy,
+                             budget_overrides=budget_overrides)
     merged: dict = dict(initial)
     for update in app.stream(initial, stream_mode="updates"):
         for node, delta in update.items():

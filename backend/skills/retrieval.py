@@ -69,12 +69,23 @@ def _dice(a: frozenset[str], b: frozenset[str]) -> float:
 _intent_cache: dict[tuple, "Intent"] = {}
 _intent_lock = threading.Lock()
 _CACHE_LIMIT = 4096
+# 命中计数：让"检索到底省了多少解析"可观测（写进 Run.trace.performance.cache）
+_intent_stats = {"hits": 0, "misses": 0, "clears": 0}
 
 
 def clear_caches() -> None:
-    """清空解析缓存（测试与 Skill 变更后调用）。"""
+    """清空解析缓存（测试与 Skill 变更后调用）。命中计数一并归零。"""
     with _intent_lock:
         _intent_cache.clear()
+        _intent_stats["hits"] = 0
+        _intent_stats["misses"] = 0
+        _intent_stats["clears"] += 1
+
+
+def cache_stats() -> dict:
+    with _intent_lock:
+        return {"hits": _intent_stats["hits"], "misses": _intent_stats["misses"],
+                "size": len(_intent_cache), "clears": _intent_stats["clears"]}
 
 
 # ---------------------------------------------------------------------------
@@ -168,7 +179,12 @@ def skill_intent(skill) -> Intent:
     pack_id = getattr(skill, "pack_id", None)
     key = ("skill", getattr(skill, "id", 0), getattr(skill, "updated_at", ""),
            getattr(skill, "question", ""), pack_id)
-    cached = _intent_cache.get(key)
+    with _intent_lock:
+        cached = _intent_cache.get(key)
+        if cached is not None:
+            _intent_stats["hits"] += 1
+        else:
+            _intent_stats["misses"] += 1
     if cached is not None:
         return cached
     tokens = tokenize(getattr(skill, "question", "") or "")
@@ -790,7 +806,7 @@ def legacy_admit(db, question: str, pack_id: str | None = None,
 
 __all__ = [
     "AdmissionDecision", "Candidate", "DataContext", "Intent", "admit",
-    "clear_caches", "data_context", "intent_from_resolved", "legacy_admit",
+    "cache_stats", "clear_caches", "data_context", "intent_from_resolved", "legacy_admit",
     "legacy_rank", "legacy_score", "query_intent", "retrieve", "route",
     "score_candidate", "skill_intent", "skill_signature", "tokenize",
     "visible_skills",

@@ -124,6 +124,31 @@ FIX_USER_TMPL = """上一次执行的代码失败或结果不完整，请修复�
 {repair_hint}"""
 
 
+# 自修复提示（成本优化版）：与上面唯一的差别是**去掉了「可用文件」段**——
+# 它在同一次请求的基础块里已经注入过，重复一遍等于为同样的信息付两次 token。
+FIX_USER_TMPL_V2 = """上一次执行的代码失败或结果不完整，请修复。
+
+## 上次代码
+```python
+{code}
+```
+
+## 执行输出（stdout 尾部）
+```
+{stdout}
+```
+
+## 错误信息（stderr 尾部）
+```
+{stderr}
+```
+
+## 历史失败（同样的错误不要重复犯）
+{repair_history}
+
+{repair_hint}"""
+
+
 def repair_history_block(previous_errors: list[dict] | None) -> str:
     """把之前几轮的失败（类别 + 指纹 + 策略）压成几行，避免 LLM 重蹈覆辙。"""
     errors = list(previous_errors or [])
@@ -139,9 +164,15 @@ def repair_history_block(previous_errors: list[dict] | None) -> str:
 
 
 def repair_user_prompt(code: str, stdout: str, stderr: str, files_block: str,
-                       repair_hint: str, previous_errors: list[dict] | None = None) -> str:
-    """构造一次自修复的 user 消息（基础上下文 + 定向处方）。"""
-    return FIX_USER_TMPL.format(
+                       repair_hint: str, previous_errors: list[dict] | None = None,
+                       policy: str = "v2") -> str:
+    """构造一次自修复的 user 消息（基础上下文 + 定向处方）。
+
+    `policy="v1"` 是冻结基线（含重复的文件清单段），`policy="v2"`（默认）去掉那段——
+    同一次请求的**基础块里已经带了「可用文件」**，再注入一遍纯属重复计费。
+    """
+    template = FIX_USER_TMPL_V2 if str(policy).lower() != "v1" else FIX_USER_TMPL
+    return template.format(
         code=code, stdout=stdout, stderr=stderr, files_block=files_block,
         repair_history=repair_history_block(previous_errors),
         repair_hint=repair_hint,

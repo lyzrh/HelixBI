@@ -20,7 +20,8 @@ API 层 (backend/routers/, :8000)
    ├── insights/     规则扫描 + 定时调度 + LLM 诊断
    ├── datasource/   文件 / DB 接入与 parquet 物化
    ├── semantic/     语义包运行时（registry 加载 / render 渲染 / resolver 确定性解析）
-   ├── evaluation/   评估流水线：固定问题集 + 分阶段指标 + 检索基准 + 自修复基准 + CLI 报告
+   ├── evaluation/   评估流水线：固定问题集 + 分阶段指标 + 检索基准 + 自修复基准
+   │                 + 成本/延迟基准（冻结开关的改造前 vs 优化后）+ CLI 报告
    └── report/       自包含 HTML 导出
    ▼
 Agent 内核 (backend/agent/)
@@ -28,8 +29,13 @@ Agent 内核 (backend/agent/)
    │                → summarize → suggest_followups（classify 决定 summarize 还是回到 generate_code）
    ├── repair.py    Self-Repair V2：错误分类 / 定向修复策略 / error signature / 有界重试与复读检测（零 token）
    ├── acceptance.py 结果验收硬门槛（execution_ok + has_artifact），validation 与 Self-Repair 共用
+   ├── intent.py    确定性意图快路径（命中即跳过 LLM 解析；"解释不了的内容"一律回落）
+   ├── context.py   prompt 上下文装配（按命中口径收窄 / 去重 / 限额 + 分块 token 记账）
+   ├── budget.py    LLM 运行预算（调用前预检 / 终止原因 / 结构化兜底）
+   ├── followups.py 确定性追问推荐（hybrid：凑不满才补一次 LLM）
+   ├── tokens.py    token 计数（tiktoken，失败降级为启发式估算并标注方法）
    ├── prompts.py   各节点 system / user 提示词（含按错误类别定制的修复处方）
-   ├── profiler.py  数据画像（注入 prompt 的紧凑 schema 摘要）
+   ├── profiler.py  数据画像（注入 prompt 的紧凑 schema 摘要；按文件指纹缓存）
    └── sandbox.py   Docker 无网络沙箱客户端 + dahelper 结果契约 + 结构化失败信息
 
 基础设施：backend/config.py（全局配置单一入口）· db.py（SQLite WAL）· models.py / schemas.py · seed.py
@@ -60,6 +66,7 @@ Login → 认证（JWT）→ user_id → User Resolver → 当前 Workspace
 - **可观测性跟随运行**：分析链路或 Skill 重放的行为变化，要同步维护 `Run.trace`（`analysis/runtime.py::_build_trace` / `build_self_repair_trace`、`skills/engine.py::_replay_trace`）与 `analysis/validation.py` 的验收项；失败轮同样写 trace。自修复行为变化必须同时更新 `trace.self_repair`，Skill 重放要标注 `not_applicable`（证明"重放不进自修复"）。
 - **验收门只有一处**：`execution_ok + has_artifact` 定义在 `backend/agent/acceptance.py`；`analysis/validation.py` 只在其上追加运行期软检查。新增"这轮算不算成功"的判断一律复用 `acceptance_gate()`，不要在别处另写一套。
 - **自修复有界且零 token**：错误分类 / 策略选择 / 复读检测 / 额度控制全部是确定性纯函数（`backend/agent/repair.py`），不得在其中调用 LLM；上限永远是 `config.MAX_FIX_ATTEMPTS`（每类额度只会在其之内更早收手）；复读必须提前终止；离线仿真结论必须标注 `measured=false`。
+- **成本优化必须可归因、可回退、不牺牲正确性**：所有 LLM 调用经 `agent/budget.py` 预检（`graph._guarded_invoke` 是唯一入口）；prompt 由 `agent/context.py` 统一装配并记账；省调用的路径只有确定性快路径 / Skill 重放 / 确定性追问三条，且每条都有 `config` 开关可回到改造前（`INTENT_MODE=llm`、`CONTEXT_POLICY=v1`、`FOLLOWUP_MODE=llm`）。快路径出现"解释不了的内容"必须回落 LLM——**不允许用更便宜的解析猜意图**。缓存只登记确定性只读内容，身份判定（权限 / 可见性 / 准入）永不入缓存。改动这些行为后跑 `python -m backend.evaluation --cost-benchmark`，`tests/evaluation/test_cost_benchmark.py` 是门禁。
 - **指标门禁**：改语义包解析、Skill 匹配等行为后跑 `python -m backend.evaluation`，确认 `tests/evaluation/` 的指标阈值不回退；评估报告缺资源阶段如实标注「未采集」，禁止编造数字。
 - **新增 / 移动领域目录或改动认证、权限、工作区行为时**，同一次提交里同步更新 `AGENTS.md` 架构地图、对应 `.agents/rules/*.md` 与 `docs/api.md`。
 

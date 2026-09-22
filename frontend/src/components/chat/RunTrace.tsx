@@ -11,6 +11,24 @@ import { FieldTimeOutlined } from '@ant-design/icons';
 import { api } from '../../api/client';
 import type { RunTrace } from '../../api/types';
 
+/** 意图来源（后端 intent_source）：这一步到底调没调 LLM */
+const INTENT_SOURCE: Record<string, { color: string; text: string }> = {
+  deterministic: { color: 'green', text: '意图解析：确定性（0 次 LLM）' },
+  llm: { color: 'blue', text: '意图解析：调用 LLM' },
+  predefined: { color: 'default', text: '意图解析：已确认的 QuerySpec' },
+  budget_fallback: { color: 'orange', text: '意图解析：预算拦下，退回确定性' },
+};
+
+/** 终止原因（后端 cost_control.termination_reason） */
+const TERMINATION_TAG: Record<string, string> = {
+  llm_call_limit: 'LLM 调用次数达预算上限',
+  input_token_limit: '输入 Token 达预算上限',
+  output_token_limit: '输出 Token 达预算上限',
+  total_token_limit: '总 Token 达预算上限',
+  cost_limit: '估算成本达预算上限',
+  environment_unavailable: '沙箱环境不可用',
+};
+
 function fmtMs(ms?: number | null): string {
   if (ms === null || ms === undefined) return '-';
   return ms >= 1000 ? `${(ms / 1000).toFixed(2)} s` : `${ms} ms`;
@@ -51,6 +69,18 @@ function TraceBody({ trace }: { trace: RunTrace }) {
   const totalTokens = (trace.llm?.input_tokens || 0) + (trace.llm?.output_tokens || 0);
   const repair = trace.self_repair;
   const repairOutcome = REPAIR_OUTCOME[repair?.outcome || ''] ;
+  const cost = trace.cost_control;
+  const perf = trace.performance;
+  const budgetLimit = cost?.budget_limit;
+  const budgetUsed = cost?.budget_used?.llm_calls;
+  // 只有显式配了上限才展示"预算"，否则满屏的 x/undefined 反而是噪声
+  const budgetCap = budgetLimit?.max_llm_calls ?? undefined;
+  const intentTag = cost?.intent_source ? INTENT_SOURCE[cost.intent_source] : undefined;
+  const terminationText = cost?.termination_reason
+    ? (TERMINATION_TAG[cost.termination_reason] || cost.termination_label || cost.termination_reason)
+    : '';
+  const genContext = perf?.context?.generation;
+  const contextBlocks = genContext?.blocks || [];
 
   return (
     <div>
@@ -101,6 +131,74 @@ function TraceBody({ trace }: { trace: RunTrace }) {
           )}
           {repair.repair_reason && (
             <div style={{ fontSize: 12, color: '#94a3b8', marginTop: 4 }}>{repair.repair_reason}</div>
+          )}
+        </div>
+      )}
+
+      {/* 成本控制：调用次数归因 / 预算 / 终止原因 / 缓存与瓶颈 */}
+      {cost && (
+        <div style={{
+          border: '1px solid #e2e8f0', borderRadius: 8, padding: '8px 10px',
+          marginBottom: 12, background: '#f8fafc',
+        }}>
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, alignItems: 'center' }}>
+            <Tag color="purple" style={{ margin: 0 }}>
+              LLM 调用 {cost.llm_calls ?? 0} 次
+            </Tag>
+            {(cost.total_tokens ?? 0) > 0 && (
+              <Tag style={{ margin: 0 }}>
+                Token {cost.input_tokens}+{cost.output_tokens}
+              </Tag>
+            )}
+            {intentTag && <Tag color={intentTag.color} style={{ margin: 0 }}>{intentTag.text}</Tag>}
+            {cost.followup_source === 'deterministic' && (
+              <Tag color="green" style={{ margin: 0 }}>追问推荐：确定性（0 次 LLM）</Tag>
+            )}
+            {cost.zero_llm && <Tag color="purple" style={{ margin: 0 }}>Skill 重放：零 LLM</Tag>}
+            {terminationText && <Tag color="orange" style={{ margin: 0 }}>{terminationText}</Tag>}
+          </div>
+
+          {/* 预算使用率：能看出"离上限还有多远" */}
+          {budgetCap && budgetUsed !== undefined && (
+            <div style={{ fontSize: 12, color: '#64748b', marginTop: 6 }}>
+              预算：LLM 调用 {budgetUsed}/{budgetCap}
+              {budgetLimit?.max_total_tokens
+                ? `　Token ${cost.budget_used?.total_tokens ?? 0}/${budgetLimit.max_total_tokens}`
+                : ''}
+              {cost.usage_source === 'estimated' ? '　（用量来自本地估算）' : ''}
+            </div>
+          )}
+
+          {/* 性能：瓶颈 + 缓存命中 */}
+          {perf && (
+            <div style={{ fontSize: 12, color: '#64748b', marginTop: 4 }}>
+              {perf.bottleneck?.node
+                ? `最慢阶段：${perf.bottleneck.label || perf.bottleneck.node} ${fmtMs(perf.bottleneck.duration_ms)}`
+                : ''}
+              {perf.cache && (perf.cache.hits > 0 || perf.cache.misses > 0)
+                ? `　缓存命中 ${perf.cache.hits}/${perf.cache.hits + perf.cache.misses}（${Math.round((perf.cache.hit_rate || 0) * 100)}%）`
+                : ''}
+            </div>
+          )}
+
+          {/* 生成 prompt 的分块记账：Token 花在哪一块 */}
+          {contextBlocks.length > 0 && (
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginTop: 6 }}>
+              <span style={{ fontSize: 12, color: '#94a3b8', alignSelf: 'center' }}>
+                生成上下文 {genContext?.total_tokens ?? 0} tok：
+              </span>
+              {contextBlocks.map((b) => (
+                <Tag key={b.name} style={{ fontSize: 11.5, margin: 0 }}>
+                  {b.name} {b.tokens}
+                </Tag>
+              ))}
+            </div>
+          )}
+
+          {(cost.budget_reason || cost.termination_label) && (
+            <div style={{ fontSize: 12, color: '#94a3b8', marginTop: 4 }}>
+              {cost.termination_label || cost.budget_reason}
+            </div>
           )}
         </div>
       )}

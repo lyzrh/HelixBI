@@ -128,25 +128,69 @@ def retrieval_trace(decision: retrieval.AdmissionDecision) -> dict:
     return {"retrieval": decision.to_dict()}
 
 
-def render_skill_prompt(skills: list) -> str:
+def render_skill_prompt(skills: list, raw: bool = False) -> str:
+    """few-shot 块。
+
+    `skills` 默认是 Skill ORM 对象；`raw=True` 时接受形如
+    `{"name","question","code"}` 的轻量字典（上下文装配器会先做限额裁剪，
+    再交给这里渲染，避免为了渲染去读整行 ORM 对象）。
+    """
     if not skills:
         return ""
     lines = ["## 相似分析案例（few-shot 参考：仅借鉴分析思路、口径与代码风格，"
              "列名以本次数据概况为准，不要照抄案例中的文件名与列名）"]
     for s in skills:
-        lines.append(f"### 案例：{s.name}")
-        lines.append(f"问题：{s.question}")
+        if raw:
+            name = s.get("name", "")
+            question = s.get("question", "")
+            code = s.get("code", "")
+        else:
+            name, question, code = s.name, s.question, s.code
+        lines.append(f"### 案例：{name}")
+        lines.append(f"问题：{question}")
         lines.append("```python")
-        lines.append(s.code)
+        lines.append(code)
         lines.append("```")
     return "\n\n".join(lines) + "\n\n"
+
+
+def skills_for_candidates(db, candidates, limit: int = 2,
+                          min_score: float | None = None,
+                          by_id: dict | None = None) -> list:
+    """把**已经算好的**检索候选转成 few-shot 用的 Skill 对象（不再重复检索）。
+
+    为什么需要它：分析链路原先先调 `route_query()`（召回 + 打分 + 准入），紧接着又调
+    `match_skills()`（召回 + 打分）来拿 few-shot 候选——同一批 Skill、同一个问题，
+    打分算了两遍、`visible_skills` 查了两遍。候选已经在 `AdmissionDecision.candidates`
+    里了（按分数排序），这里只做一次按 id 取行。
+    """
+    from backend import config
+
+    floor = config.SKILL_RETRIEVAL_MIN_SCORE if min_score is None else min_score
+    picked = [c for c in (candidates or []) if c.final_score >= floor][:limit]
+    if not picked:
+        return []
+    by_id = by_id if by_id is not None else {
+        s.id: s for s in visible_skills(db, None, None)
+    }
+    out = []
+    for candidate in picked:
+        skill = by_id.get(candidate.skill_id)
+        if skill is not None:
+            out.append(skill)
+    return out
+
+
+def visible_skills(db, workspace_id: int | None = None, user_id: int | None = None) -> list:
+    return retrieval.visible_skills(db, workspace_id, user_id)
 
 
 # ---- 运行（双模式）----
 
 def run_skill(skill_pk: int, session_id: int | None, data_source_ids: list[int],
               on_event=None, workspace_id: int | None = None,
-              question: str | None = None, decision=None) -> dict:
+              question: str | None = None, decision=None,
+              routing_ms: int = 0) -> dict:
     """在工作线程中运行 Skill，返回落库摘要。
 
     两种模式（由 `_replay_gate` 决定）：
@@ -211,7 +255,8 @@ def run_skill(skill_pk: int, session_id: int | None, data_source_ids: list[int],
 
             if replay:
                 summary = _replay(db, skill, session_id, data_source_ids, files, emit, t0,
-                                  question=run_question, retrieval=_decision_dict(decision))
+                                  question=run_question, retrieval=_decision_dict(decision),
+                                  routing_ms=routing_ms)
                 if summary.get("ok"):
                     emit("step", {"node": "skill", "label": f"运行 Skill「{skill.name}」",
                                   "status": "done"})
@@ -308,7 +353,8 @@ def _create_run(db, session_id, question, data_source_ids, skill_id,
 
 
 def _replay(db, skill, session_id, data_source_ids, files, emit, t0,
-            question: str | None = None, retrieval: dict | None = None) -> dict:
+            question: str | None = None, retrieval: dict | None = None,
+            routing_ms: int = 0) -> dict:
     """列匹配 → 直接重放代码（不经过 LLM）。"""
     code = _normalize_data_paths(skill.code, files)
 
@@ -348,10 +394,14 @@ def _replay(db, skill, session_id, data_source_ids, files, emit, t0,
         run.answer = answer
         run.duration_ms = duration_ms
         run.trace = jdump(_replay_trace(run_pk, skill, execution, answer, ok, duration_ms,
-                                        question=question, retrieval=retrieval))
+                                        question=question, retrieval=retrieval,
+                                        routing_ms=routing_ms))
         meta = {"run_id": run_pk, "charts": _chart_urls(execution),
                 "tables": execution["tables"], "followups": [],
-                "attempts": 1, "ok": ok, "code": code, "skill_replay": True}
+                "attempts": 1, "ok": ok, "code": code, "skill_replay": True,
+                "cost": {"llm_calls": 0, "total_tokens": 0,
+                         "intent_source": "not_applicable",
+                         "termination_reason": ""}}
         msg = Message(session_id=session_id, role="assistant", content=answer, meta=jdump(meta))
         db2.add(msg)
         db2.flush()
@@ -366,13 +416,16 @@ def _replay(db, skill, session_id, data_source_ids, files, emit, t0,
 
 def _replay_trace(run_pk: int, skill, execution: dict, answer: str,
                   ok: bool, duration_ms: int, question: str | None = None,
-                  retrieval: dict | None = None) -> dict:
+                  retrieval: dict | None = None, routing_ms: int = 0) -> dict:
     """重放路径的可观测记录。
 
     关键字段是 `llm.calls == 0`——「Skill 重放不经过 LLM」从此是可验证的数据，
     而不是 README 里的一句自我声明。
 
     `skill.retrieval` 记录本次检索的候选与准入依据（为什么选中它、为什么允许重放）。
+    `cost_control` / `performance` 与 Agent 路径同构：重放轮的 LLM 调用与 token
+    恒为 0，耗时拆成「路由（检索 + 准入）/ 沙箱执行」两段——这样"重放省了多少、
+    时间花在哪"与 Agent 轮可以直接对比。
     """
     from backend import config
     from backend.analysis.validation import validate_final
@@ -380,6 +433,12 @@ def _replay_trace(run_pk: int, skill, execution: dict, answer: str,
     skill_block = {"matched_ids": [skill.id], "hit": True, "mode": "replay"}
     if retrieval is not None:
         skill_block["retrieval"] = retrieval
+    routing_ms = max(int(routing_ms or 0), 0)
+    execution_ms = max(duration_ms - routing_ms, 0)
+    stage_latency = [{"node": "routing", "label": "检索与重放准入",
+                      "duration_ms": routing_ms, "status": "done"},
+                     {"node": "execute", "label": "沙箱执行（重放）",
+                      "duration_ms": execution_ms, "status": "done"}]
     return {
         "run_id": run_pk,
         "question": question or skill.question,
@@ -409,6 +468,35 @@ def _replay_trace(run_pk: int, skill, execution: dict, answer: str,
         },
         "llm": {"calls": 0, "input_tokens": 0, "output_tokens": 0,
                 "cost_usd": 0.0, "by_node": {}},
+        # Cost & Latency V1：重放轮的"零成本"与耗时构成，和 Agent 轮同一套字段
+        "cost_control": {
+            "llm_calls": 0, "calls_by_node": {}, "input_tokens": 0,
+            "output_tokens": 0, "total_tokens": 0, "estimated_cost_usd": 0.0,
+            "budget_limit": {"limited": False, "reason": "重放路径不调用 LLM，不消耗预算"},
+            "budget_used": {"llm_calls": 0, "input_tokens": 0, "output_tokens": 0,
+                            "total_tokens": 0, "cost_usd": 0.0, "blocked_calls": 0,
+                            "termination_reason": "", "termination_label": "",
+                            "denied_node": "", "notes": []},
+            "budget_blocked_calls": 0, "budget_utilization": {},
+            "termination_reason": "", "termination_label": "", "budget_reason": "",
+            "blocked_node": "", "usage_source": "provider",
+            "intent_source": "not_applicable", "followup_source": "not_applicable",
+            "summarize_source": "not_applicable",
+            "zero_llm": True,
+            "notes": ["Skill 高置信重放：跳过意图解析、代码生成与结论整理"],
+        },
+        "performance": {
+            "stage_latency": stage_latency,
+            "bottleneck": {"node": "execute", "label": "沙箱执行（重放）",
+                           "duration_ms": execution_ms},
+            "total_stage_ms": routing_ms + execution_ms,
+            "llm_stage_ms": 0,
+            "sandbox_stage_ms": execution_ms,
+            "routing_ms": routing_ms,
+            "cache": {"hits": 0, "misses": 0, "hit_rate": 0.0, "by_category": {}},
+            "context": {},
+            "queue_wait_ms": None,
+        },
         "validation": validate_final({"execution": execution, "answer": answer}),
         "final_status": "done" if ok else "failed",
     }

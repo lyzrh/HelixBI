@@ -311,6 +311,56 @@ export interface RunTrace {
     cost_usd: number;
     by_node?: Record<string, number>;
   };
+  /** 成本控制档案：调了几次 / Token 花在哪 / 有没有被预算拦下 / 省在哪 */
+  cost_control?: {
+    llm_calls: number;
+    calls_by_node?: Record<string, number>;
+    input_tokens: number;
+    output_tokens: number;
+    total_tokens: number;
+    estimated_cost_usd?: number;
+    budget_limit?: {
+      max_llm_calls?: number | null;
+      max_input_tokens?: number | null;
+      max_total_tokens?: number | null;
+      limited?: boolean;
+    };
+    budget_used?: { llm_calls?: number; total_tokens?: number; blocked_calls?: number };
+    budget_blocked_calls?: number;
+    budget_utilization?: Record<string, number | null>;
+    termination_reason?: string;
+    termination_label?: string;
+    budget_reason?: string;
+    blocked_node?: string;
+    usage_source?: string;
+    intent_source?: string;
+    followup_source?: string;
+    summarize_source?: string;
+    token_counter?: string;
+    zero_llm?: boolean;
+  };
+  /** 性能档案：分阶段耗时 / 瓶颈 / 缓存命中 / 上下文分块记账 */
+  performance?: {
+    stage_latency?: { node: string; label?: string; duration_ms: number; status?: string }[];
+    bottleneck?: { node?: string; label?: string; duration_ms?: number };
+    total_stage_ms?: number;
+    llm_stage_ms?: number;
+    sandbox_stage_ms?: number;
+    cache?: {
+      hits: number;
+      misses: number;
+      hit_rate: number;
+      by_category?: Record<string, { hits: number; misses: number }>;
+    };
+    context?: Record<string, {
+      policy?: string;
+      total_tokens?: number;
+      blocks?: { name: string; tokens: number; chars?: number }[];
+      notes?: string[];
+      token_counter?: string;
+    }>;
+    queue_wait_ms?: number | null;
+  };
   validation: {
     status: 'ok' | 'warn' | 'fail';
     checks: { name: string; ok: boolean; detail: string }[];
