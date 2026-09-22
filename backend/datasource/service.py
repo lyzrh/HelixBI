@@ -13,6 +13,7 @@ from pathlib import Path
 import pandas as pd
 from sqlalchemy import create_engine, inspect, text
 
+from backend.datasource import secrets as credential_secrets
 from backend.semantic import load_pack
 from backend.config import (
     MATERIALIZED_DIR, MATERIALIZED_MAX_ROWS, MATERIALIZED_TTL_HOURS,
@@ -31,11 +32,24 @@ def build_url(db_type: str, host: str, port: int | None, database: str,
     raise ValueError(f"不支持的数据库类型: {db_type}")
 
 
+def connection_password(ds: DataSource) -> str:
+    """取**连接用明文口令**——唯一解密点，只在后端内部使用。
+
+    - 库里存的是密文 → 解密（缺密钥 / 被篡改会抛出明确异常，不会拿密文当口令去连）；
+    - 库里存的是历史明文 → 原样返回（兼容旧库，启动时的一次性迁移会把它加密）。
+    """
+    stored = ds.password or ""
+    if not stored or not credential_secrets.is_encrypted(stored):
+        return stored
+    return credential_secrets.decrypt_secret(stored)
+
+
 def build_engine(ds: DataSource):
     return create_engine(build_url(
         ds.db_type, ds.host or "", ds.port, ds.database_name or "",
-        ds.username or "", ds.password or "",
+        ds.username or "", connection_password(ds),
     ), pool_pre_ping=True)
+
 
 
 def test_connection(db_type: str, host: str, port: int | None, database: str,

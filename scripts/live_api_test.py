@@ -188,6 +188,67 @@ record("S5", "安全", "静态目录 /uploads 匿名可访问(已知风险)", "2
 st, b = req("GET", "/runs/")
 record("S6", "安全", "静态目录 /runs 匿名可访问(已知风险)", "200/404(记录)", st, True)
 
+# ---------- Security Hardening V1（鉴权 / Token 生命周期 / 凭据 / 产物）----------
+st, b = req("POST", "/api/auth/login", body={"username": "admin", "password": "admin123"})
+login = jbody(b) if st == 200 else {}
+access = login.get("token")
+refresh = login.get("refresh_token")
+record("SEC01", "安全", "登录返回短期 access + 可撤销 refresh", "两者皆非空",
+       f"access={bool(access)},refresh={bool(refresh)},ttl={login.get('expires_in')}",
+       bool(access) and bool(refresh) and login.get("expires_in", 0) > 0)
+
+st, b = req("POST", "/api/auth/refresh", body={"refresh_token": refresh})
+rotated = jbody(b) if st == 200 else {}
+record("SEC02", "安全", "refresh 轮换成功（新令牌不同于旧）", 200,
+       f"{st},rotated={rotated.get('refresh_token') != refresh}",
+       st == 200 and rotated.get("refresh_token") and rotated.get("refresh_token") != refresh)
+
+st, b = req("POST", "/api/auth/refresh", body={"refresh_token": refresh})
+record("SEC03", "安全", "旧 refresh 重放被拒(整族吊销)", 401, st, st == 401)
+st2, _ = req("POST", "/api/auth/refresh", body={"refresh_token": rotated.get("refresh_token")})
+record("SEC04", "安全", "重放后整族会话失效", 401, st2, st2 == 401)
+
+st, _ = req("GET", "/api/auth/me", token=refresh)
+record("SEC05", "安全", "refresh 不能当 access 访问业务 API", 401, st, st == 401)
+st, _ = req("GET", "/api/auth/me", token=(access or "")[:-3] + "aaa")
+record("SEC06", "安全", "篡改 access token 被拒", 401, st, st == 401)
+
+st, b = req("POST", "/api/auth/login", body={"username": "admin", "password": "admin123"})
+access2, refresh2 = jbody(b).get("token"), jbody(b).get("refresh_token")
+st, _ = req("POST", "/api/auth/logout", body={"refresh_token": refresh2})
+st2, _ = req("POST", "/api/auth/refresh", body={"refresh_token": refresh2})
+record("SEC07", "安全", "logout 后 refresh 不可再用", f"{200}→{401}", f"{st}→{st2}",
+       st == 200 and st2 == 401)
+
+st, b = req("GET", "/api/usage/summary", token=viewer_token, ws=1)
+record("SEC08", "安全", "viewer 读用量/成本被拒", 403, st, st == 403)
+st, _ = req("PUT", "/api/settings/llm", token=viewer_token, ws=1, body={"model": "deepseek-chat"})
+record("SEC09", "安全", "viewer 改 LLM 设置被拒", 403, st, st == 403)
+st, _ = req("GET", "/api/auth/permissions")
+st2, _ = req("GET", "/api/auth/permissions", token=analyst_token, ws=1)
+st3, _ = req("GET", "/api/auth/permissions", token=admin_token, ws=1)
+record("SEC10", "安全", "权限清单：匿名/普通成员被拒、管理员可读", "401/403/200",
+       f"{st}/{st2}/{st3}", (st, st2, st3) == (401, 403, 200))
+
+st, _ = req("GET", "/runs/1/out/chart.png")
+record("SEC11", "安全", "匿名读产物被拒", 401, st, st == 401)
+st, _ = req("GET", "/runs/1/out/chart.png", token=admin_token, ws=1)
+record("SEC12", "安全", "越界/不存在的产物路径不泄露(404)", "404/422", st, st in (404, 422))
+
+st, b = req("GET", "/api/datasources", token=admin_token, ws=1)
+payload = b.decode("utf-8", "replace")
+record("SEC13", "安全", "数据源响应不含口令明文", "无 password 字段",
+       f"has_password={'has_password' in payload},password_field={'\"password\"' in payload}",
+       "has_password" in payload and '\"password\"' not in payload)
+
+st, b = req("GET", "/api/auth/audit?limit=20", token=admin_token, ws=1)
+items = jbody(b).get("items", []) if st == 200 else []
+kinds = {e.get("event") for e in items}
+st2, _ = req("GET", "/api/auth/audit", token=viewer_token, ws=1)
+record("SEC14", "安全", "安全审计：管理员可读且有事件、viewer 403", "200 有事件 / 403",
+       f"{st},events={sorted(k for k in kinds if k)[:3]},{st2}",
+       st == 200 and bool(kinds) and st2 == 403)
+
 # ---------- 性能基准 ----------
 def timed_get(path, token=None, ws=None):
     t0 = time.perf_counter()

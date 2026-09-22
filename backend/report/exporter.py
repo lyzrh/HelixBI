@@ -44,15 +44,32 @@ def _rows_table(rows: list[dict], limit: int = 100) -> str:
     return f'<table><thead><tr>{thead}</tr></thead><tbody>{trs}</tbody></table>'
 
 
-def build_dashboard_html(dashboard: Dashboard, items: list[DashboardItem]) -> bytes:
+def build_dashboard_html(dashboard: Dashboard, items: list[DashboardItem],
+                         allowed_run_dirs: set[str] | None = None,
+                         visible_run_ids: set[int] | None = None) -> bytes:
+    """仪表板导出（图表 base64 内嵌）。
+
+    安全（Security Hardening V1）：仪表板条目的 `payload.chart_url` 与 `source_run_id`
+    都是**客户端提交**的，因此导出时逐条校验：
+
+    - `chart_url` 必须落在 RUNS_DIR 内（`chart_url_to_path` 拒绝路径遍历）；
+    - 若传入了 `allowed_run_dirs`（当前工作区可见的产物目录），图表目录必须在其中——
+      否则跳过该图，不把别人的工作区产物嵌进我们的报告；
+    - 若传入了 `visible_run_ids`，`source_run_id` 不在其中时整条跳过。
+    """
     cards_html = []
     for item in items:
         payload = jload(item.payload)
+        if visible_run_ids is not None and item.source_run_id \
+                and item.source_run_id not in visible_run_ids:
+            continue
         inner = ""
         if item.type == "chart":
-            p = chart_url_to_path(payload.get("chart_url", ""))
-            if p.exists():
-                b64 = base64.b64encode(p.read_bytes()).decode()
+            path = chart_url_to_path(payload.get("chart_url", ""))
+            allowed = (path is not None
+                       and (allowed_run_dirs is None or path.parent.parent.name in allowed_run_dirs))
+            if allowed and path.exists():
+                b64 = base64.b64encode(path.read_bytes()).decode()
                 inner = f'<img src="data:image/png;base64,{b64}"/>'
             elif payload.get("rows"):
                 # 自助分析（ECharts 组件）条目：导出静态数据表兜底
@@ -78,10 +95,14 @@ def build_dashboard_html(dashboard: Dashboard, items: list[DashboardItem]) -> by
 
 
 def build_run_html(run: Run) -> bytes:
-    """单轮分析导出（复用 app/report.py）。"""
+    """单轮分析导出（复用 app/report.py）。路径越界（含 `../`）的图表一律忽略。"""
     import markdown as _md
 
-    charts_abs = [str(chart_url_to_path(u)) for u in jload(run.charts, [])]
+    charts_abs = []
+    for url in jload(run.charts, []):
+        path = chart_url_to_path(url)
+        if path is not None:
+            charts_abs.append(str(path))
     entry = {
         "question": run.question,
         "ts": run.created_at,

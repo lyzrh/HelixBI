@@ -170,7 +170,8 @@ def test_case9_admin_manages_members_full_flow(api, env, db_session):
     frank_token = _token(api, f"frank-{suffix}", "reg-pass-12345")
     ctx = api.get("/api/auth/me", headers=_headers(frank_token, ws_a)).json()["context"]
     assert ctx["role"] == "viewer"
-    assert ctx["permissions"] == sorted(["datasource:read", "dashboard:read", "skill:read"])
+    assert ctx["permissions"] == sorted(
+        ["datasource:read", "analysis:read", "dashboard:read", "skill:read"])
 
     # 修改角色 viewer → analyst
     resp = api.patch(f"/api/auth/workspaces/{ws_a}/members/{frank_uid}",

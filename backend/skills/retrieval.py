@@ -495,24 +495,42 @@ def score_candidate(skill, intent: Intent, ctx: DataContext | None,
 # 候选召回（要召回广，宁可多召回再排序）
 # ---------------------------------------------------------------------------
 
-def visible_skills(db, workspace_id: int | None = None, user_id: int | None = None) -> list:
-    """作用域过滤：global 全库可见；workspace 限本工作区；user 限本人。
+def skill_scope_filter(workspace_id: int | None, user_id: int | None):
+    """Skill 作用域过滤条件（SQLAlchemy 表达式，**不含** enabled）。
 
-    注意 user 作用域：**无论 workspace_id 是否为空都只对本人可见**。
-    只按 workspace_id 过滤会让同一工作区里的他人 user Skill 被检索到
-    （旧实现就存在这个问题），这里显式收紧。
+    三条规则，检索层 / 列表接口 / 单条读取必须完全一致：
+
+    - `global`：全库可见；
+    - `user`：**只看本人**（无论 workspace_id 是否为空）——只按 workspace_id 过滤会让
+      同工作区的他人 user Skill 被看到，这里显式收紧；
+    - `workspace`（含历史无归属数据）：限本工作区，`workspace_id` 为空视为全局兼容。
     """
     from sqlalchemy import and_, or_
 
+    return or_(
+        Skill.scope == "global",
+        and_(Skill.scope == "user", Skill.user_id == user_id),
+        and_(Skill.scope != "user", or_(Skill.workspace_id == workspace_id,
+                                        Skill.workspace_id.is_(None))),
+    )
+
+
+def skill_visible(skill, workspace_id: int | None, user_id: int | None) -> bool:
+    """单条 Skill 的可见性判断（与 `skill_scope_filter` 同一套规则）。"""
+    if skill is None:
+        return False
+    if skill.scope == "user":
+        return skill.user_id == user_id
+    if skill.scope == "global":
+        return True
+    return skill.workspace_id in (workspace_id, None)
+
+
+def visible_skills(db, workspace_id: int | None = None, user_id: int | None = None) -> list:
+    """作用域过滤（含 enabled）：global 全库可见；workspace 限本工作区；user 限本人。"""
     query = db.query(Skill).filter(Skill.enabled == True)  # noqa: E712
     if workspace_id is not None:
-        query = query.filter(or_(
-            Skill.scope == "global",
-            and_(Skill.scope == "user", Skill.user_id == user_id),
-            # 历史数据（workspace_id 为空）继续视为全局可见，保持兼容
-            and_(Skill.scope != "user", or_(Skill.workspace_id == workspace_id,
-                                            Skill.workspace_id.is_(None))),
-        ))
+        query = query.filter(skill_scope_filter(workspace_id, user_id))
     return query.all()
 
 

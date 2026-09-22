@@ -9,7 +9,9 @@ from sqlalchemy.orm import Session
 from backend.auth.context import UserContext
 from backend.auth.deps import get_current_context, require_permission
 from backend.db import get_db
-from backend.models import Dashboard, DashboardItem, Insight
+from backend.models import (
+    Dashboard, DashboardItem, Insight, Run, Session as DbSession,
+)
 from backend.schemas import (
     DashboardCreate, DashboardItemCreate, DashboardItemPatch, DashboardPatch,
     ItemReorderBody,
@@ -111,6 +113,14 @@ def add_item(did: int, body: DashboardItemCreate, db: Session = Depends(get_db),
         DashboardItem.sort_order.desc()).first()
     next_order = (max_order[0] + 1) if max_order and max_order[0] is not None else 0
     import json
+    if body.source_run_id:
+        run = db.get(Run, body.source_run_id)
+        run_session = (db.get(DbSession, run.session_id)
+                       if run and run.session_id else None)
+        if not run_session:
+            raise HTTPException(404, "运行记录不存在")
+        if run_session.workspace_id is not None                 and run_session.workspace_id != ctx.workspace_id:
+            raise HTTPException(404, "运行记录不存在")
     obj = DashboardItem(dashboard_id=did, type=body.type, title=body.title,
                         payload=json.dumps(payload, ensure_ascii=False),
                         source_run_id=body.source_run_id, sort_order=next_order)
@@ -168,11 +178,28 @@ def reorder_items(did: int, body: ItemReorderBody, db: Session = Depends(get_db)
 @router.get("/{did}/export")
 def export_dashboard(did: int, db: Session = Depends(get_db),
                      ctx: UserContext = Depends(get_current_context)):
+    """导出仪表板 HTML。
+
+    安全：条目里的 `chart_url` / `source_run_id` 是客户端提交的，导出前按当前
+    工作区可见的产物目录与运行 id 过滤，避免把别的工作区的产物内嵌进报告
+    （同时拒绝 `../` 这类路径遍历）。
+    """
+    from backend.analysis.runtime import visible_run_dirs
+    from backend.models import Run
+
     d = _get_visible_dashboard(db, did, ctx)
     items = (db.query(DashboardItem)
              .filter(DashboardItem.dashboard_id == did)
              .order_by(DashboardItem.sort_order, DashboardItem.id).all())
-    content = build_dashboard_html(d, items)
+    allowed_dirs = visible_run_dirs(db, ctx.workspace_id)
+    visible_run_ids = {
+        rid for (rid,) in (db.query(Run.id)
+                           .join(DbSession, Run.session_id == DbSession.id)
+                           .filter((DbSession.workspace_id == ctx.workspace_id)
+                                   | (DbSession.workspace_id.is_(None))).all())
+    }
+    content = build_dashboard_html(d, items, allowed_run_dirs=allowed_dirs,
+                                   visible_run_ids=visible_run_ids)
     filename = urllib.parse.quote(f"{d.name}.html")
     return Response(content=content, media_type="text/html",
                     headers={"Content-Disposition": f"attachment; filename*=UTF-8''{filename}"})

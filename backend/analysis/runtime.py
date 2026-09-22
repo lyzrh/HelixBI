@@ -7,6 +7,7 @@
 - worker 自行管理 SQLAlchemy Session（不依赖请求作用域的 db）。
 """
 
+import os
 import time
 import urllib.parse
 from pathlib import Path
@@ -22,6 +23,7 @@ from backend.db import SessionLocal
 from backend.models import (
     DataSource, Message, Run, SceneAgent, TokenUsage, jdump, jload,
 )
+from backend.models import Session as RunSession
 from backend.semantic import pack_for_file, render_semantic_prompt, resolve
 
 EXTENDED_NODE_LABELS = {**NODE_LABELS, "materialize": "缓存数据库数据", "skill": "复用分析 Skill"}
@@ -75,6 +77,16 @@ def run_analysis_stream(
     except Exception as exc:
         import traceback
         traceback.print_exc()
+        # 越权请求（绕过 API 层直驱链路时）同样要留痕：这是权限的第三道门
+        if isinstance(exc, PermissionError):
+            from backend.auth import audit
+
+            audit.record("authz.permission_denied", "denied",
+                         user_id=(user_context or {}).get("user_id"),
+                         username=(user_context or {}).get("username", ""),
+                         workspace_id=(user_context or {}).get("workspace_id"),
+                         target="analysis:execute",
+                         detail={"reason": "runtime_tool_gate", "error": str(exc)[:120]})
         with SessionLocal() as db:
             run = db.get(Run, run_pk)
             if run:
@@ -496,19 +508,66 @@ def _llm_stats(run_pk: int) -> dict:
 
 # ---- 工具 ----
 
+def run_artifact_key(run_dir: str) -> str:
+    """产物 URL 里的那段 key（`/runs/<key>/out/<chart>`）。
+
+    `Run.run_dir` 指向运行的 **out** 目录（`runs/<key>/out`），所以 URL 的 key 是它的父目录名；
+    生成（`_chart_urls`）与校验（`visible_run_dirs` / 文件下发路由）共用这个函数，
+    避免两处各写一套导致图表 URL 与鉴权路由对不上。
+    """
+    path = Path(str(run_dir or ""))
+    return path.parent.name if path.name == "out" else path.name
+
+
 def _chart_urls(execution: dict) -> list[str]:
-    """runs 目录内图表 → 相对静态 URL（run_id 含中文必须 quote）。"""
+    """runs 目录内图表 → 带鉴权的相对 URL（key 可能含中文，必须 quote）。"""
     run_dir = execution.get("run_dir")
     charts = execution.get("charts") or []
     if not run_dir or not charts:
         return []
-    out_dir = Path(run_dir)
-    rid = urllib.parse.quote(out_dir.parent.name)
+    rid = urllib.parse.quote(run_artifact_key(run_dir))
     return [f"/runs/{rid}/out/{urllib.parse.quote(c)}" for c in charts]
 
 
-def chart_url_to_path(url: str) -> Path:
-    """/runs/{rid}/out/{name} → 宿主绝对路径（仪表板导出用）。"""
-    unquoted = urllib.parse.unquote(url)
+def chart_url_to_path(url: str) -> Path | None:
+    """/runs/{run_dir}/out/{name} → 宿主绝对路径（仪表板 / 单轮导出用）。
+
+    安全（Security Hardening V1）：`url` 可能来自客户端提交的仪表板 payload，
+    因此必须**拒绝一切越过 RUNS_DIR 的路径**（`../`、绝对路径、URL 编码变体），
+    否则导出会变成任意文件读取（连 SQLite 元数据库都能被读出来）。
+    越界一律返回 None，由调用方按"没有这张图"处理。
+    """
+    unquoted = urllib.parse.unquote(str(url or ""))
     rel = unquoted[len("/runs/"):] if unquoted.startswith("/runs/") else unquoted
-    return RUNS_DIR / rel.lstrip("/")
+    rel = rel.lstrip("/")
+    if not rel or rel.startswith("~"):
+        return None
+    base = RUNS_DIR.resolve()
+    try:
+        target = (base / rel).resolve()
+    except (OSError, RuntimeError):
+        return None
+    if os.path.commonpath([str(base), str(target)]) != str(base):
+        return None
+    return target
+
+
+def visible_run_dirs(db, workspace_id: int | None) -> set[str]:
+    """本工作区可见的 Run 产物目录名集合（导出时用来判定"这张图是不是我们的"）。
+
+    产物 URL 里的第一段是**运行目录名**（`run_id` 字符串，不是数据库主键），
+    因此归属校验必须经 `Run → Session.workspace_id → run_dir` 反查，而不是只看路径形状。
+    """
+    names: set[str] = set()
+    try:
+        rows = (db.query(Run.run_dir)
+                .join(RunSession, Run.session_id == RunSession.id)
+                .filter((RunSession.workspace_id == workspace_id)
+                        | (RunSession.workspace_id.is_(None))).all())
+    except Exception:  # noqa: BLE001 — 查不到就当作"没有可见产物"，宁严不松
+        return names
+    for (run_dir,) in rows:
+        if run_dir:
+            names.add(run_artifact_key(run_dir))
+    return names
+

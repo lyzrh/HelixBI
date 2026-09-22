@@ -106,6 +106,22 @@ SKILL_ADMISSION_MARGIN = float(os.getenv("SKILL_ADMISSION_MARGIN", "0.03"))
 LLM_PRICE_INPUT_PER_MTOK = float(os.getenv("LLM_PRICE_INPUT_PER_MTOK", "0"))
 LLM_PRICE_OUTPUT_PER_MTOK = float(os.getenv("LLM_PRICE_OUTPUT_PER_MTOK", "0"))
 
+# ---- 安全（Security Hardening V1）----
+#
+# 三类密钥都只从环境变量读，**不写进数据库、不写进 Git**：
+# - HELIX_JWT_SECRET：JWT 签名密钥（多进程部署必须显式配置，否则各进程密钥不同）；
+# - HELIX_SECRET_KEY：数据源凭据的**应用级加密主密钥**（缺省时拒绝保存数据库密码，
+#   绝不静默降级为明文）；
+# - HELIX_ENV：运行环境（development / production），只影响错误提示的语气与
+#   是否允许「兼容读取历史明文」这类宽松行为。
+ENV_NAME = (os.getenv("HELIX_ENV", "development") or "development").strip().lower()
+IS_PRODUCTION = ENV_NAME in ("production", "prod")
+SECRET_KEY = os.getenv("HELIX_SECRET_KEY", "")
+
+# Token 生命周期：access 短期有效，refresh 长但可撤销（DB 存储，多进程安全）
+ACCESS_TOKEN_TTL_SECONDS = int(os.getenv("HELIX_ACCESS_TOKEN_TTL", "3600"))
+REFRESH_TOKEN_TTL_SECONDS = int(os.getenv("HELIX_REFRESH_TOKEN_TTL", str(30 * 24 * 3600)))
+
 
 def update_llm_config(base_url: str | None = None, api_key: str | None = None,
                       model: str | None = None) -> None:
@@ -138,12 +154,13 @@ UPLOADS_DIR.mkdir(parents=True, exist_ok=True)
 RUNS_DIR.mkdir(parents=True, exist_ok=True)
 
 __all__ = [
-    "CODE_TIMEOUT_SECONDS", "DATA_DIR", "DB_PATH", "ENV_PATH", "FRONTEND_DIST",
+    "ACCESS_TOKEN_TTL_SECONDS", "CODE_TIMEOUT_SECONDS", "DATA_DIR", "DB_PATH",
+    "ENV_NAME", "ENV_PATH", "FRONTEND_DIST", "IS_PRODUCTION",
     "LLM_PRICE_INPUT_PER_MTOK", "LLM_PRICE_OUTPUT_PER_MTOK",
     "LLM_TEMPERATURE", "MATERIALIZED_DIR", "MATERIALIZED_MAX_ROWS",
     "MATERIALIZED_TTL_HOURS", "MAX_FIX_ATTEMPTS", "MAX_UPLOAD_MB", "MODEL_NAME",
-    "OPENAI_API_KEY", "OPENAI_BASE_URL", "PROJECT_ROOT", "REPAIR_POLICY",
-    "REPAIR_REPEAT_LIMIT", "RUNS_DIR",
+    "OPENAI_API_KEY", "OPENAI_BASE_URL", "PROJECT_ROOT", "REFRESH_TOKEN_TTL_SECONDS",
+    "REPAIR_POLICY", "REPAIR_REPEAT_LIMIT", "RUNS_DIR", "SECRET_KEY",
     "SANDBOX_CPUS", "SANDBOX_IMAGE", "SANDBOX_MEMORY", "SEMANTIC_PACKS_DIR",
     "SKILL_ADMISSION_HIGH", "SKILL_ADMISSION_LOW", "SKILL_ADMISSION_MARGIN",
     "SKILL_RETRIEVAL_MIN_SCORE", "SKILL_RETRIEVAL_TOP_K", "SKILL_RETRIEVAL_WEIGHTS",

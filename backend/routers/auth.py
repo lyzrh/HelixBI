@@ -1,7 +1,13 @@
-"""认证路由：/login（只负责认证）+ UserContext / 工作区 / 成员管理。
+"""认证路由：/login（只负责认证）+ Token 生命周期 + UserContext / 工作区 / 成员管理。
 
 权限解析全部在后端：用户不能自选角色；角色由 WorkspaceMember 决定。
 切换工作区 = 重新解析 UserContext（前端随后刷新上下文）。
+
+Token 生命周期（Security Hardening V1）：
+- `/login` 返回**短期 access token + 可撤销 refresh token**；
+- `/refresh` 轮换（旧 refresh 立即失效，重放会牵连整族）；
+- `/logout` 吊销当前会话，`/revoke-all` 吊销本人全部，管理员可强制下线某用户；
+- token 里只有身份（`sub`/`username`/`typ`），**权限永远实时解析**。
 """
 
 import re
@@ -10,9 +16,12 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
+from backend.auth import audit, tokens
 from backend.auth.context import resolve_user_context
-from backend.auth.deps import get_current_context, require_permission
-from backend.auth.security import create_token, decode_token, hash_password, verify_password
+from backend.auth.deps import _extract_token, get_current_context, require_permission
+from backend.auth.security import (
+    create_token, decode_token, hash_password, verify_password,
+)
 from backend.db import get_db
 from backend.models import (
     Permission, Role, User, Workspace, WorkspaceMember, jdump,
@@ -27,6 +36,14 @@ _EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
 class LoginBody(BaseModel):
     username: str = Field(min_length=1)  # 支持用户名或邮箱
     password: str = Field(min_length=1)
+
+
+class RefreshBody(BaseModel):
+    refresh_token: str = Field(min_length=8)
+
+
+class LogoutBody(BaseModel):
+    refresh_token: str | None = None
 
 
 class SwitchWorkspaceBody(BaseModel):
@@ -89,22 +106,122 @@ def register(body: RegisterBody, db: Session = Depends(get_db)):
 
 
 @router.post("/login")
-def login(body: LoginBody, db: Session = Depends(get_db)):
-    """用户名 / 邮箱 + 口令 → JWT。只认证，不授权。"""
+def login(body: LoginBody, request: Request, db: Session = Depends(get_db)):
+    """用户名 / 邮箱 + 口令 → access token + refresh token。只认证，不授权。"""
     user = (db.query(User)
             .filter((User.username == body.username) | (User.email == body.username))
             .first())
     if not user or not user.is_active or not verify_password(body.password, user.password_hash):
+        # 失败一律同一个 401 文案 + 审计（用户名照记，口令绝不落库）
+        audit.record("auth.login", "failed", user_id=user.id if user else None,
+                     username=body.username, detail={"reason": "bad_credentials"},
+                     request=request)
         raise HTTPException(401, "用户名或密码错误")
-    token = create_token(user.id, user.username)
     memberships = _memberships(db, user.id)
     if not memberships:
+        audit.record("auth.login", "denied", user_id=user.id, username=user.username,
+                     detail={"reason": "no_workspace"}, request=request)
         raise HTTPException(403, "用户尚未加入任何工作区，请联系管理员")
+
+    token = create_token(user.id, user.username)
+    refresh_token, _row = tokens.issue_refresh(
+        db, user.id, workspace_id=memberships[0]["workspace_id"],
+        user_agent=request.headers.get("User-Agent", ""))
+    audit.record("auth.login", "ok", user_id=user.id, username=user.username,
+                 workspace_id=memberships[0]["workspace_id"], request=request)
     return {
         "token": token,
+        "refresh_token": refresh_token,
+        "token_type": "bearer",
+        "expires_in": _access_ttl(),
+        "refresh_expires_in": tokens.refresh_ttl_seconds(),
         "user": user.to_dict(),
         "workspaces": memberships,
     }
+
+
+@router.post("/refresh")
+def refresh_token(body: RefreshBody, request: Request, db: Session = Depends(get_db)):
+    """刷新访问令牌（轮换 refresh token）。
+
+    旧 refresh token 一旦使用即失效；若再次出现，视为泄露重放 →
+    吊销该登录会话的全部令牌（详见 `backend/auth/tokens.py`）。
+    """
+    try:
+        access, new_refresh, _row = tokens.rotate(
+            db, body.refresh_token, user_agent=request.headers.get("User-Agent", ""),
+            request=request)
+    except tokens.TokenError as exc:
+        # 可预期的失败（无效/过期/已撤销/重放）统一 401，细节已在审计里留痕
+        raise HTTPException(401, exc.message)
+    return {"token": access, "refresh_token": new_refresh, "token_type": "bearer",
+            "expires_in": _access_ttl(),
+            "refresh_expires_in": tokens.refresh_ttl_seconds()}
+
+
+@router.post("/logout")
+def logout(body: LogoutBody, request: Request, db: Session = Depends(get_db)):
+    """登出：吊销当前 refresh token（幂等，永远 200，客户端总能清本地态）。"""
+    revoked = False
+    if body.refresh_token:
+        revoked = tokens.revoke(db, body.refresh_token, tokens.REASON_LOGOUT)
+    audit.record("auth.logout", "ok" if revoked else "noop", request=request,
+                 detail={"revoked": revoked})
+    return {"ok": True, "revoked": revoked}
+
+
+@router.post("/revoke-all")
+def revoke_all(request: Request, db: Session = Depends(get_db),
+               ctx=Depends(get_current_context)):
+    """使本人全部令牌失效（改密 / 怀疑泄露时的自助操作）。"""
+    count = tokens.revoke_all_for_user(db, ctx.user_id, tokens.REASON_REVOKE_ALL)
+    audit.record("auth.token_revoked", "ok", user_id=ctx.user_id,
+                 username=ctx.username, workspace_id=ctx.workspace_id,
+                 target=f"user:{ctx.user_id}", detail={"revoked": count,
+                                                       "scope": "self"},
+                 request=request)
+    return {"ok": True, "revoked": count}
+
+
+@router.get("/sessions")
+def my_sessions(db: Session = Depends(get_db), ctx=Depends(get_current_context)):
+    """当前有效登录会话（refresh token 族）——便于用户自查异常登录。"""
+    return tokens.active_sessions(db, ctx.user_id)
+
+
+@router.post("/users/{uid}/revoke")
+def revoke_user_tokens(uid: int, request: Request, db: Session = Depends(get_db),
+                       ctx=Depends(require_permission("member:manage"))):
+    """管理员强制下线指定用户（吊销其全部 refresh token）。"""
+    target = (db.query(WorkspaceMember)
+              .filter(WorkspaceMember.workspace_id == ctx.workspace_id,
+                      WorkspaceMember.user_id == uid).first())
+    if not target:
+        raise HTTPException(404, "用户不是当前工作区成员")
+    count = tokens.revoke_all_for_user(db, uid, tokens.REASON_ADMIN)
+    audit.record("auth.token_revoked", "ok", user_id=ctx.user_id, username=ctx.username,
+                 workspace_id=ctx.workspace_id, target=f"user:{uid}",
+                 detail={"revoked": count, "scope": "admin"}, request=request)
+    return {"ok": True, "revoked": count}
+
+
+@router.get("/audit")
+def security_audit(limit: int = 50, event: str = "", db: Session = Depends(get_db),
+                   ctx=Depends(require_permission("member:manage"))):
+    """安全事件审计（管理员）：登录 / 刷新 / 吊销 / 越权被拒 / 产物访问被拒 / 凭据变更。
+
+    只读本人工作区相关事件之外的全局记录属管理员权限；返回内容经过脱敏，
+    永远不含口令与令牌原文。
+    """
+    return {"items": audit.recent(db, limit=limit, event=event),
+            "viewer": {"user_id": ctx.user_id, "workspace_id": ctx.workspace_id}}
+
+
+def _access_ttl() -> int:
+    from backend.auth.security import access_ttl
+
+    return access_ttl()
+
 
 
 @router.get("/me")
@@ -147,12 +264,15 @@ def switch_workspace(body: SwitchWorkspaceBody, request: Request,
 # ---- 成员 / 用户管理（workspace:manage / member:manage）----
 
 @router.get("/permissions")
-def list_permissions(db: Session = Depends(get_db)):
+def list_permissions(db: Session = Depends(get_db),
+                     _ctx=Depends(require_permission("member:manage"))):
+    """权限点清单：面向成员管理界面，管理员可见（原先匿名可枚举，已收口）。"""
     return [p.to_dict() for p in db.query(Permission).order_by(Permission.code).all()]
 
 
 @router.get("/roles")
-def list_roles(db: Session = Depends(get_db)):
+def list_roles(db: Session = Depends(get_db),
+               _ctx=Depends(require_permission("member:manage"))):
     from backend.models import RolePermission
 
     out = []
@@ -163,6 +283,7 @@ def list_roles(db: Session = Depends(get_db)):
             db.query(RolePermission).filter(RolePermission.role_code == role.code).all())
         out.append(d)
     return out
+
 
 
 @router.get("/users")

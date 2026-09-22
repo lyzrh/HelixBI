@@ -35,8 +35,17 @@ logger = logging.getLogger(__name__)
 _llm = None
 
 # ---- 用户偏好（设置页可改：回答风格 / 创意度 / 追问开关 / 自定义指令） ----
+#
+# 偏好按**用户**存储：键是 `user_preferences:<user_id>`，读取时回退到旧的全局键
+# `user_preferences`（历史兼容）。这样自定义指令只会注入本人的分析 prompt，
+# 不会跨用户串味——安全上这是"跨用户影响"的收口点（见 docs/security.md）。
+# 键的构造放在内核层（消费方在这里），设置路由复用同一函数，避免两份约定漂移。
 
-_prefs_cache: dict = {"ts": 0.0, "data": None}
+PREFERENCE_KV_KEY = "user_preferences"
+PROFILE_KV_KEY = "user_profile"
+
+_prefs_cache: dict[str, dict] = {}
+_PREFS_TTL_SECONDS = 30
 
 STYLE_PROMPTS = {
     "concise": "\n\n【回答风格】简洁模式：100 字以内，只给核心结论与关键数字，不展开分析过程。",
@@ -45,14 +54,36 @@ STYLE_PROMPTS = {
 }
 
 
-def _get_prefs() -> dict:
-    """读用户偏好 KV，30 秒 TTL 缓存（避免每个节点都查库）。"""
+def preference_kv_key(user_id: int | None = None) -> str:
+    return f"{PREFERENCE_KV_KEY}:{int(user_id)}" if user_id else PREFERENCE_KV_KEY
+
+
+def profile_kv_key(user_id: int | None = None) -> str:
+    return f"{PROFILE_KV_KEY}:{int(user_id)}" if user_id else PROFILE_KV_KEY
+
+
+def _state_user_id(state: "AgentState") -> int | None:
+    """从可信 UserContext 取当前用户 id（匿名旧链路返回 None）。"""
+    context = state.get("user_context") or {}
+    try:
+        return int(context.get("user_id")) if context.get("user_id") else None
+    except (TypeError, ValueError):
+        return None
+
+
+def _get_prefs(user_id: int | None = None) -> dict:
+    """读用户偏好的 KV，30 秒 TTL 缓存（按用户缓存，避免每节点都查库）。"""
     import time
 
+    from backend import config
+
+    cache_key = str(user_id or "global")
     now = time.time()
-    if _prefs_cache["data"] is not None and now - _prefs_cache["ts"] < 30:
-        return _prefs_cache["data"]
-    prefs = {"answer_style": "standard", "followups_enabled": True, "custom_instructions": ""}
+    cached = _prefs_cache.get(cache_key)
+    if cached and now - cached["ts"] < _PREFS_TTL_SECONDS:
+        return cached["data"]
+    prefs = {"answer_style": "standard", "followups_enabled": True,
+             "custom_instructions": "", "temperature": config.LLM_TEMPERATURE}
     try:
         import json as _json
 
@@ -60,25 +91,26 @@ def _get_prefs() -> dict:
         from backend.models import SystemSetting
 
         with SessionLocal() as db:
-            row = db.get(SystemSetting, "user_preferences")
+            row = db.get(SystemSetting, preference_kv_key(user_id)) if user_id else None
+            if row is None:                      # 兼容旧版全局偏好
+                row = db.get(SystemSetting, PREFERENCE_KV_KEY)
             if row:
                 data = _json.loads(row.value)
                 prefs.update({k: v for k, v in data.items() if k in prefs})
     except Exception:
         pass
-    _prefs_cache["ts"] = now
-    _prefs_cache["data"] = prefs
+    _prefs_cache[cache_key] = {"ts": now, "data": prefs}
     return prefs
 
 
 def invalidate_prefs_cache() -> None:
     """设置页保存偏好后调用，让下一轮分析立即生效。"""
-    _prefs_cache["data"] = None
+    _prefs_cache.clear()
 
 
-def _pref_block(style_target: str = "summarize") -> str:
+def _pref_block(style_target: str = "summarize", user_id: int | None = None) -> str:
     """偏好 → 附加 prompt 块：回答风格（仅结论节点）+ 自定义指令（全节点）。"""
-    prefs = _get_prefs()
+    prefs = _get_prefs(user_id)
     block = ""
     if style_target == "summarize":
         block += STYLE_PROMPTS.get(prefs.get("answer_style", "standard"), "")
@@ -284,7 +316,8 @@ def generate_code(state: AgentState) -> dict:
     from backend.semantic import render_spec_prompt
 
     messages = [
-        SystemMessage(content=prompts.GENERATE_SYSTEM + _pref_block("generate")),
+        SystemMessage(content=prompts.GENERATE_SYSTEM
+                       + _pref_block("generate", _state_user_id(state))),
         HumanMessage(
             content=_history_block(state.get("history"))
             + state.get("semantic_block", "")
@@ -475,7 +508,8 @@ def summarize(state: AgentState) -> dict:
     llm = get_llm()
     response = llm.invoke(
         [
-            SystemMessage(content=prompts.SUMMARIZE_SYSTEM + _pref_block("summarize")),
+            SystemMessage(content=prompts.SUMMARIZE_SYSTEM
+                       + _pref_block("summarize", _state_user_id(state))),
             HumanMessage(
                 content=f"## 用户问题\n{state['question']}\n\n## 执行结果\n"
                 f"```json\n{result_json}\n```\n\n## stderr（若失败）\n"
@@ -494,7 +528,7 @@ def suggest_followups(state: AgentState) -> dict:
     execution = state["execution"]
     if not execution.get("ok"):
         return {"followups": []}
-    if not _get_prefs().get("followups_enabled", True):
+    if not _get_prefs(_state_user_id(state)).get("followups_enabled", True):
         return {"followups": []}
     try:
         llm = get_llm()

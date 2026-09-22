@@ -1,7 +1,9 @@
 /** 认证状态：JWT + UserContext + 工作区切换 */
 
 import { create } from 'zustand';
-import { api, clearAuth, getToken, getWorkspaceId, TOKEN_KEY, WS_KEY } from '../api/client';
+import {
+  api, clearAuth, getRefreshToken, getToken, setAuth, WS_KEY,
+} from '../api/client';
 
 export interface UserContextInfo {
   user_id: number;
@@ -42,10 +44,12 @@ export const useAuthStore = create<AuthState>((set, get) => ({
     try {
       const resp = await api.post<{
         token: string;
+        refresh_token?: string;
         user: { username: string; display_name: string };
         workspaces: WorkspaceInfo[];
       }>('/api/auth/login', { username, password });
-      localStorage.setItem(TOKEN_KEY, resp.token);
+      // access + refresh 一起落本地：access 短期有效，401 时由 client 自动换新
+      setAuth(resp.token, resp.refresh_token ?? null);
       // 默认工作区 = 后端返回的第一个成员关系（用户不能自选角色）
       const first = resp.workspaces[0];
       if (first) localStorage.setItem(WS_KEY, String(first.workspace_id));
@@ -79,6 +83,11 @@ export const useAuthStore = create<AuthState>((set, get) => ({
   },
 
   logout: () => {
+    // 先让后端吊销 refresh token（令牌可撤销），再清本地态；失败也要清干净
+    const refreshToken = getRefreshToken();
+    if (refreshToken) {
+      api.post('/api/auth/logout', { refresh_token: refreshToken }).catch(() => undefined);
+    }
     clearAuth();
     set({ token: null, context: null, workspaces: [] });
   },

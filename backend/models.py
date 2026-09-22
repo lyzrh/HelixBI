@@ -146,12 +146,18 @@ class DataSource(Base):
     updated_at: Mapped[str] = mapped_column(String(19), default=now_str, onupdate=now_str)
 
     def to_dict(self) -> dict:
+        """对外序列化：**绝不含 password**。
+
+        只暴露 `has_password` 布尔——前端需要知道"这条连接配没配口令"，
+        但没有任何场景需要把口令读回去（改口令走写接口）。
+        """
         return {
             "id": self.id, "name": self.name, "type": self.type,
             "file_path": self.file_path, "file_name": self.file_name,
             "file_type": self.file_type, "size_bytes": self.size_bytes,
             "db_type": self.db_type, "host": self.host, "port": self.port,
             "database_name": self.database_name, "username": self.username,
+            "has_password": bool(self.password),
             "pack_id": self.pack_id, "columns": jload(self.columns_json, []),
             "row_count": self.row_count,
             "materialized_path": self.materialized_path,
@@ -410,3 +416,74 @@ class RolePermission(Base):
 
     def to_dict(self) -> dict:
         return {"role_code": self.role_code, "permission_code": self.permission_code}
+
+
+class RefreshToken(Base):
+    """可撤销的刷新令牌（Token Lifecycle）。
+
+    设计要点（最小必要结构，不引入额外的会话服务）：
+    - **只存哈希**：库里是 `sha256(token)`，泄露库也拿不到可用的 refresh token；
+    - **轮换**：每次 refresh 都吊销旧行、签发新行，`replaced_by` 记链条；
+    - **重放检测**：拿已轮换的旧 token 再来 → 认定为重放，整族（family_id）吊销；
+    - **多进程安全**：撤销状态在数据库里，不依赖进程内存（`revoked_at` 非空即失效）。
+    """
+
+    __tablename__ = "refresh_tokens"
+    __table_args__ = (
+        Index("idx_refresh_token_hash", "token_hash", unique=True),
+        Index("idx_refresh_user", "user_id", "id"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    user_id: Mapped[int] = mapped_column(Integer, nullable=False)
+    token_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    family_id: Mapped[str] = mapped_column(String(64), default="")
+    # 登录时所在的工作区（审计用；不参与授权——授权始终由 UserContext 实时解析）
+    workspace_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    user_agent: Mapped[str] = mapped_column(String(120), default="")
+    issued_at: Mapped[str] = mapped_column(String(19), default=now_str)
+    expires_at: Mapped[str] = mapped_column(String(19), default=now_str)
+    revoked_at: Mapped[str | None] = mapped_column(String(19), nullable=True)
+    revoked_reason: Mapped[str] = mapped_column(String(32), default="")
+    replaced_by: Mapped[str] = mapped_column(String(64), default="")
+
+    def to_dict(self) -> dict:
+        """对外序列化：不含 token / token_hash（哈希也不外泄，避免离线爆破）。"""
+        return {"id": self.id, "user_id": self.user_id, "family_id": self.family_id,
+                "workspace_id": self.workspace_id, "issued_at": self.issued_at,
+                "expires_at": self.expires_at, "revoked_at": self.revoked_at,
+                "revoked_reason": self.revoked_reason}
+
+
+class AuditLog(Base):
+    """安全事件审计（Security Events）。
+
+    只记"谁在什么时候对什么做了什么、结果如何"，**严禁记录凭据**：
+    口令 / 数据库口令 / access token / refresh token / 加密密钥一律不落库
+    （写入前统一走 `backend/auth/audit.py::redact`）。
+    """
+
+    __tablename__ = "audit_logs"
+    __table_args__ = (
+        Index("idx_audit_event", "event", "id"),
+        Index("idx_audit_user", "user_id", "id"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    event: Mapped[str] = mapped_column(String(48), nullable=False)   # auth.login / authz.denied ...
+    outcome: Mapped[str] = mapped_column(String(16), default="ok")   # ok | denied | failed
+    user_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    username: Mapped[str] = mapped_column(String(64), default="")
+    workspace_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    target: Mapped[str] = mapped_column(String(160), default="")     # 资源标识（不含敏感值）
+    detail: Mapped[str] = mapped_column(Text, default="{}")
+    ip: Mapped[str] = mapped_column(String(64), default="")
+    created_at: Mapped[str] = mapped_column(String(19), default=now_str)
+
+    def to_dict(self) -> dict:
+        return {"id": self.id, "event": self.event, "outcome": self.outcome,
+                "user_id": self.user_id, "username": self.username,
+                "workspace_id": self.workspace_id, "target": self.target,
+                "detail": jload(self.detail), "ip": self.ip,
+                "created_at": self.created_at}
+

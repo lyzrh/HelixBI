@@ -1,13 +1,24 @@
-"""数据源路由：文件上传 / DB 连接 / 预览 / 物化 / 行业包切换。"""
+"""数据源路由：文件上传 / DB 连接 / 预览 / 物化 / 行业包切换。
+
+安全边界（Security Hardening V1）：
+
+- 所有端点在登录门之上再按操作挂权限点（读 `datasource:read` / 写 `datasource:write`）；
+- **数据库口令只以密文落库**（`backend/datasource/secrets.py`），API 响应永不含明文；
+- 缺少加密密钥时拒绝保存并给出可操作提示，不静默降级为明文；
+- 凭据写入 / 迁移 / 历史明文读取都进审计（`/auth/audit`）。
+"""
 
 import uuid
 from pathlib import Path
 
-from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile
 from sqlalchemy.orm import Session
 
+from backend import config
+from backend.auth import audit
 from backend.auth.context import UserContext
 from backend.auth.deps import get_current_context, require_permission
+from backend.datasource import secrets as credential_secrets
 from backend.semantic import assign_pack, infer_pack, list_packs, load_pack
 from backend.config import MAX_UPLOAD_MB, UPLOADS_DIR
 from backend.db import get_db
@@ -95,7 +106,8 @@ async def upload_file(file: UploadFile = File(...), name: str = Form(""),
 
 
 @router.post("/db")
-def create_db_source(body: DataSourceDbCreate, db: Session = Depends(get_db),
+def create_db_source(body: DataSourceDbCreate, request: Request,
+                     db: Session = Depends(get_db),
                      ctx: UserContext = Depends(require_permission("datasource:write"))):
     cfg = body.config
     ok, msg = test_connection(
@@ -106,16 +118,33 @@ def create_db_source(body: DataSourceDbCreate, db: Session = Depends(get_db),
         raise HTTPException(400, msg)
     if cfg.db_type == "sqlite" and not cfg.sqlite_path and not cfg.database:
         raise HTTPException(400, "sqlite 需提供文件路径")
+    # 落库前加密：没有配置 HELIX_SECRET_KEY 时**明确报错**，绝不静默写明文
+    try:
+        stored_password = credential_secrets.encrypt_secret(cfg.password or "")
+    except credential_secrets.SecretsUnavailable as exc:
+        audit.record("datasource.credential_saved", "failed", user_id=ctx.user_id,
+                     username=ctx.username, workspace_id=ctx.workspace_id,
+                     target=f"datasource:{body.name}",
+                     detail={"reason": "missing_encryption_key"}, request=request)
+        raise HTTPException(500 if config.IS_PRODUCTION else 400, str(exc))
     obj = DataSource(
         name=body.name, type="db", db_type=cfg.db_type,
         host=cfg.host or "", port=cfg.port, database_name=cfg.database or cfg.sqlite_path,
-        username=cfg.username or "", password=cfg.password or "",
+        username=cfg.username or "", password=stored_password,
         pack_id=body.pack_id, workspace_id=ctx.workspace_id,
     )
     db.add(obj)
     db.flush()
     db.commit()
+    # 审计只记"是否带口令、是否已加密"，不记口令本身
+    audit.record("datasource.credential_saved", "ok", user_id=ctx.user_id,
+                 username=ctx.username, workspace_id=ctx.workspace_id,
+                 target=f"datasource:{obj.id}",
+                 detail={"db_type": cfg.db_type, "has_password": bool(cfg.password),
+                         "encrypted": credential_secrets.is_encrypted(stored_password)},
+                 request=request)
     return obj.to_dict()
+
 
 
 @router.post("/test")

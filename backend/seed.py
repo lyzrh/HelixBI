@@ -28,23 +28,29 @@ PERMISSIONS = [
     ("sql:execute", "执行 SQL 查询"),
     ("analysis:create", "创建会话"),
     ("analysis:execute", "执行 AI 分析"),
+    ("analysis:read", "查看分析结果与产物（含下载/导出）"),
     ("dashboard:read", "查看仪表板"),
     ("dashboard:write", "编辑仪表板"),
     ("skill:read", "查看 Skill"),
     ("skill:write", "创建/修改 Skill"),
+    ("usage:read", "查看用量与成本（平台级）"),
+    ("settings:write", "修改平台设置（LLM 接口等）"),
     ("workspace:manage", "管理工作区"),
     ("member:manage", "管理成员与角色"),
 ]
 
+# 权限点只加"确实对应一类资源 / 一类操作"的，不做无意义细分（Security Hardening V1
+# 新增 3 个：analysis:read / usage:read / settings:write，理由见 docs/security.md）。
 ROLE_PERMISSIONS = {
     "admin": [p[0] for p in PERMISSIONS],
     "analyst": [
         "datasource:read", "datasource:write", "sql:execute",
-        "analysis:create", "analysis:execute",
+        "analysis:create", "analysis:execute", "analysis:read",
         "dashboard:read", "dashboard:write",
         "skill:read", "skill:write",
     ],
-    "viewer": ["datasource:read", "dashboard:read", "skill:read"],
+    # viewer 是"只读角色"：能看到分析结果与产物，但没有执行 / 写入 / 用量与平台设置权限
+    "viewer": ["datasource:read", "analysis:read", "dashboard:read", "skill:read"],
 }
 
 EXAMPLES = [

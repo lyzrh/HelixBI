@@ -60,7 +60,7 @@ can always connect your own data.
 
 | Module | Capabilities |
 | --- | --- |
-| **Auth & RBAC** | Username / email + password sign-in (JWT) + self-registration (grants no roles); UserContext resolved from user → workspace membership → role → permissions, so the *same person can be an analyst in one workspace and a viewer in another*; 11 permission points across datasources / SQL / analysis / dashboards / skills / membership; admins manage members visually (add / re-role / remove, last-admin protection); authorization always enforced server-side — bypassing the UI still gets rejected |
+| **Auth & RBAC** | Username / email + password sign-in (JWT) + self-registration (grants no roles); UserContext resolved from user → workspace membership → role → permissions, so the *same person can be an analyst in one workspace and a viewer in another*; 14 permission points across datasources / SQL / analysis / dashboards / skills / usage / platform settings / membership; admins manage members visually (add / re-role / remove, last-admin protection); authorization always enforced server-side — bypassing the UI still gets rejected; **token lifecycle**: short-lived access tokens + revocable refresh tokens (rotation, replay detection, logout, admin force-logout) with security-event auditing |
 | **Conversational Analysis** | Ask in natural language; SSE streams step progress / code / terminal / charts / tables / conclusions; "confirm query first" mode lets you edit the QuerySpec before execution; **Self-Repair V2** on failure (classify the error → inject a targeted repair hint → bounded retry with repeat detection → structured fallback); one-click suggested follow-ups |
 | **Self-Service Analytics** | Click / drag fields for instant charts (ECharts interactive rendering, fully local — zero tokens); switch freely among bar / line / pie / area / scatter / stacked charts; adjustable aggregation and sorting |
 | **Scenario Agents** | Pre-built industry experts for retail sales and manufacturing production: bound semantic packs and datasources, opening messages, suggested questions, start/stop management — ready to chat out of the box |
@@ -71,8 +71,40 @@ can always connect your own data.
 | **Semantic Layer** | Industry semantic packs define metrics (with derived formulas: yield, attainment rate, average order value, etc.), dimensions, synonyms, time conventions, and chart suggestions — injected into generation prompts to keep definitions consistent |
 | **Settings Center** | Hot-reload LLM endpoints (DeepSeek / Zhipu / Qwen / any OpenAI-compatible API — takes effect on save, no restart); preferences (answer style / creativity / follow-up toggle / custom instructions); **UI language toggle (中文 / English)** — applies instantly to navigation / workbench / settings, persisted locally; profile |
 | **Reliability** | Network-isolated sandbox + CPU / memory limits + read-only data; `dahelper` JSON contract for returning results; SQLite metadata store in WAL mode; authorization enforced three times: API layer, runtime entry, before tool execution |
+| **Security boundary** | Artifacts / uploads / caches are served only through **authenticated routes** (no anonymous static mounts; path-traversal protection and workspace ownership lookup); database passwords are **encrypted at rest** (key from env only — a missing key refuses the save instead of writing plaintext); exports are filtered by workspace; full write-up in [docs/security.md](docs/security.md) |
 | **Evaluation** | 65 fixed questions (retail / manufacturing / colloquial adversarial cases) + **12 self-repair failure scenarios** (syntax / missing column / type / empty result / timeout / OOM / repeated error / multi-error / budget exhausted / acceptance-not-passed / sandbox unavailable / replay never repairs) + staged metric reports (semantic resolution / context injection / skill matching / replay admission / self-repair); metric thresholds wired into pytest as CI gates |
 | **Observability** | Every analysis run persists a `Run.trace`: per-stage latencies, LLM calls & tokens, skill hit mode, six result-acceptance checks, and **the acting user / workspace / role**; the frontend "run timeline" panel exposes it — skill replay's `LLM calls == 0` is data, not copy |
+
+## Security
+
+Six boundaries, each covered by tests and audit events:
+
+```
+① Authentication      pbkdf2 passwords + short-lived access JWT (typ=access only)
+② Authorization       UserContext (user → membership → role → permission), 14 permission points
+③ Workspace isolation every datasource / session / run / skill / dashboard / insight is scoped
+④ Artifact protection authenticated download routes, traversal guard, ownership lookup
+⑤ Secret protection   datasource credentials encrypted at rest (HELIX_SECRET_KEY) + auto migration
+⑥ Token lifecycle     revocable refresh tokens: rotation, replay detection, logout, force-logout
+⑦ Audit               security events persisted and redacted (never passwords / tokens / keys)
+```
+
+- **Tokens carry identity only** — permissions are resolved per request, so granting a permission
+  takes effect without a re-login; refresh tokens are opaque random strings stored as hashes and
+  **cannot be used as access tokens**.
+- **Status codes**: `401` unauthenticated / invalid or expired token / not a member of the requested
+  workspace; `403` authenticated but missing the permission point; `404` not found **or not in your
+  workspace** (existence is never revealed).
+- **Previously "signed-in only" endpoints are now gated**: LLM settings (write needs
+  `settings:write`, reads are graded), usage & cost (`usage:read`, workspace-filtered),
+  permission catalog (`member:manage`), analysis & artifacts (`analysis:read`),
+  datasources (`datasource:read/write`).
+- All secrets come from environment variables: `HELIX_JWT_SECRET`, `HELIX_SECRET_KEY`
+  (see `.env.example`). **Without an encryption key the API refuses to store a database password**
+  instead of silently falling back to plaintext.
+
+Problem → risk → design → implementation → tests → result → remaining limitations:
+[docs/security.md](docs/security.md).
 
 ## Auth & RBAC
 
@@ -347,6 +379,14 @@ cp .env.example .env
 ```
 
 Edit `.env` and fill in `OPENAI_BASE_URL` / `OPENAI_API_KEY` / `MODEL_NAME`.
+**For any non-local deployment also set** `HELIX_JWT_SECRET` (JWT signing key) and
+`HELIX_SECRET_KEY` (datasource credential encryption key — without it, saving a DB connection is
+refused rather than storing the password in plaintext):
+
+```bash
+python -c "import secrets;print('HELIX_JWT_SECRET=' + secrets.token_urlsafe(48))"
+python -c "import secrets;print('HELIX_SECRET_KEY=' + secrets.token_urlsafe(48))"
+```
 
 `.env` supports any OpenAI-compatible endpoint (DeepSeek / Zhipu GLM / Qwen / local
 vLLM…). You can also configure it at runtime in the Settings Center (top-right corner) —
@@ -361,6 +401,16 @@ MODEL_NAME=deepseek-chat
 # fine for single-process local dev only; multi-process / production
 # deployments MUST set it, otherwise every restart invalidates logins)
 HELIX_JWT_SECRET=replace-with-a-long-random-string
+
+# Datasource credential encryption key (required to save DB connection passwords;
+# when unset the API refuses the save instead of storing plaintext)
+HELIX_SECRET_KEY=replace-with-another-long-random-string
+
+# Runtime environment: development | production
+HELIX_ENV=development
+# Access token TTL (seconds) / refresh token TTL (seconds, revocable)
+HELIX_ACCESS_TOKEN_TTL=3600
+HELIX_REFRESH_TOKEN_TTL=2592000
 ```
 
 ### 2. Sandbox image
@@ -499,7 +549,7 @@ execution, self-repair, and follow-up recommendation.
 
 - **R2**: dashboards rendered client-side (interactive ECharts instead of PNG), insight subscription push, i18n for the remaining pages (the zh/en toggle already covers navigation / workbench / settings; the sign-in page and workspace selector are still Chinese-only); ~~multi-user support & permissions~~ (✅ shipped: sign-in / workspaces / UserContext / RBAC — see "Auth & RBAC")
 - **R3**: ~~regression evaluation~~ (✅ shipped: `backend/evaluation/` + `tests/evaluation/` gates; next: grow the question set and collect sandbox-execution metrics), visual semantic-pack editor, metric lineage
-- **Security hardening (P1)**: authenticate the static artifact mounts (`/runs`, `/uploads`, `/data` are currently open), encrypt stored database passwords, refresh tokens & a revocation list, finer-grained permissions for agent / settings endpoints
+- **Security hardening (P1)**: ~~authenticate the static artifact mounts~~, ~~encrypt stored database passwords~~, ~~refresh tokens & revocation~~, ~~finer-grained permissions for settings / usage / analysis endpoints~~ (✅ shipped as Security Hardening V1 — see [docs/security.md](docs/security.md) for the full list and remaining limitations)
 - **Architecture (P2)**: `backend/routers/` → `api/` and `config/db/models/schemas` → `core/`; introduce `features/` domains in the frontend (see [.agents/rules/architecture.md](.agents/rules/architecture.md))
 
 ## License

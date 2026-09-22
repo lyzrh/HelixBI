@@ -131,7 +131,8 @@ def test_case2_same_user_different_roles_per_workspace(api, sales_ws):
     assert "sql:execute" not in ctx_mkt["permissions"]
     assert "analysis:execute" in ctx_sales["permissions"]
     assert "analysis:execute" not in ctx_mkt["permissions"]
-    assert ctx_mkt["permissions"] == sorted(["datasource:read", "dashboard:read", "skill:read"])
+    assert ctx_mkt["permissions"] == sorted(
+        ["datasource:read", "analysis:read", "dashboard:read", "skill:read"])
 
 
 def test_user_cannot_access_workspace_they_are_not_member_of(api, sales_ws):

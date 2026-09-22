@@ -169,7 +169,7 @@ def _get_visible_run(db: Session, rid: int, ctx: UserContext) -> Run:
 
 @router.get("/runs/recent")
 def recent_runs(limit: int = 8, db: Session = Depends(get_db),
-                ctx: UserContext = Depends(get_current_context)):
+                ctx: UserContext = Depends(require_permission("analysis:read"))):
     """工作台「最近分析」列表（成功/失败都要，供快捷回访），按工作区过滤。"""
     runs = (db.query(Run).join(DbSession, Run.session_id == DbSession.id)
             .filter((DbSession.workspace_id == ctx.workspace_id)
@@ -187,13 +187,14 @@ def recent_runs(limit: int = 8, db: Session = Depends(get_db),
 
 @router.get("/runs/{rid}")
 def get_run(rid: int, db: Session = Depends(get_db),
-            ctx: UserContext = Depends(get_current_context)):
+            ctx: UserContext = Depends(require_permission("analysis:read"))):
+    """运行详情（含 trace 与产物元数据）——读分析数据需要 analysis:read。"""
     return _get_visible_run(db, rid, ctx).to_dict()
 
 
 @router.get("/runs/{rid}/export")
 def export_run(rid: int, db: Session = Depends(get_db),
-               ctx: UserContext = Depends(get_current_context)):
+               ctx: UserContext = Depends(require_permission("analysis:read"))):
     """单轮分析结果导出自包含 HTML。"""
     import urllib.parse
 

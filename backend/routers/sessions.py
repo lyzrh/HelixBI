@@ -34,7 +34,7 @@ def create_session(body: SessionCreate, db: Session = Depends(get_db),
 
 @router.get("")
 def list_sessions(db: Session = Depends(get_db),
-                  ctx: UserContext = Depends(get_current_context)):
+                  ctx: UserContext = Depends(require_permission("analysis:read"))):
     sessions = (db.query(DbSession)
                 .filter((DbSession.workspace_id == ctx.workspace_id)
                         | (DbSession.workspace_id.is_(None)))
@@ -53,7 +53,7 @@ def list_sessions(db: Session = Depends(get_db),
 
 @router.get("/{sid}")
 def get_session(sid: int, db: Session = Depends(get_db),
-                ctx: UserContext = Depends(get_current_context)):
+                ctx: UserContext = Depends(require_permission("analysis:read"))):
     s = db.get(DbSession, sid)
     if not s:
         raise HTTPException(404, "会话不存在")

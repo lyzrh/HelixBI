@@ -46,6 +46,37 @@ def init_db() -> None:
     _migrate()
     with SessionLocal() as db:
         seed.run(db)
+        _migrate_credentials(db)
+
+
+def _migrate_credentials(db) -> None:
+    """启动时把历史明文的数据源口令一次性加密（幂等；缺密钥则如实跳过并告警）。
+
+    为什么放在启动而不是懒迁移：明文在库里多躺一分钟就多一分钟的风险；
+    而且这一步是确定性的、可重复执行的，失败也不会影响服务启动。
+    """
+    import logging
+
+    from backend.auth import audit
+    from backend.datasource import secrets as credential_secrets
+
+    logger = logging.getLogger(__name__)
+    try:
+        result = credential_secrets.migrate_plaintext_passwords(db)
+    except Exception as exc:  # noqa: BLE001 — 迁移失败不阻塞启动，但必须可见
+        logger.warning("数据源口令加密迁移失败：%s", exc)
+        return
+    if result["status"] == "skipped":
+        logger.warning("数据源口令加密迁移跳过（%s）：历史明文将保持原样，"
+                       "配置密钥后重启即可迁移", result["reason"])
+        return
+    if result["migrated"]:
+        # 只记数量与结果，绝不记口令内容
+        audit.record("datasource.credential_migrated", "ok", target="data_sources",
+                     detail={"migrated": result["migrated"],
+                             "remaining_plaintext": result["remaining"]})
+        logger.info("已加密 %d 条历史明文数据源口令（剩余明文 %d 条）",
+                    result["migrated"], result["remaining"])
 
 
 def _migrate() -> None:
