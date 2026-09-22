@@ -366,7 +366,27 @@ def _dig(entry: dict, metric: str):
     return None
 
 
-# ---- 6. 端到端（需 Docker + LLM，缺失则跳过） ----
+# ---- 6. Self-Repair 离线策略仿真（确定性；桩化 LLM 与沙箱，驱动真实图谱）----
+
+def eval_self_repair_offline() -> dict:
+    """V1（无差别重试）vs V2（分类 + 定向修复 + 有界重试）的离线对照。
+
+    诚实性说明：本阶段**不是实测**。LLM 与 Docker 执行被桩化（本机/CI 常常没有可用沙箱），
+    但被对比的决策逻辑（错误分类、策略选择、复读检测、额度控制、路由、prompt 组装、
+    token 记账、结果验收）全部是真实代码路径，结果里显式标注
+    `mode="offline_simulation"` / `measured=False`，不与实测数字混排。
+    真实执行成功率仍在 `execution` / `self_repair` 两个 gated 阶段里按
+    "未采集 + 原因" 呈现。
+    """
+    from backend.evaluation import repair_bench as repair
+
+    try:
+        return repair.evaluate()
+    except Exception as exc:  # noqa: BLE001 — 仿真失败要如实说，不能装作有数据
+        return {"status": "error", "reason": f"离线仿真执行失败：{exc}"}
+
+
+# ---- 7. 端到端（需 Docker + LLM，缺失则跳过） ----
 
 def pipeline_blocker() -> str | None:
     """返回阻塞原因；None 表示可以真实跑链路。
@@ -404,19 +424,30 @@ def pipeline_blocker() -> str | None:
 
 
 def eval_pipeline(cases: list[dict], limit: int = 3) -> dict:
-    """真实跑 Agent 链路：执行成功率 / 自修复成功率 / 延迟 / LLM 调用次数。"""
+    """真实跑 Agent 链路：执行成功率 / 自修复成功率 / 延迟 / LLM 调用次数。
+
+    自修复部分按 Self-Repair V2 的口径采集：首次成功率、修复次数、错误类别分布、
+    复读终止次数与修复耗时——全部来自 `Run.trace.self_repair`（同一份观测数据）。
+    """
     reason = pipeline_blocker()
     if reason:
         return {"status": "skipped", "reason": reason}
 
+    from backend.agent.acceptance import acceptance_gate
     from backend.agent.graph import stream_analysis
+    from backend.analysis.runtime import build_self_repair_trace
     from backend.evaluation.samples import sample_files_for_pack
     from backend.semantic import render_semantic_prompt
 
     exec_ok = Counter()
     repaired_total, repaired_ok = 0, 0
+    first_pass = Counter()
+    reparsed = Counter()
+    repair_attempts = Latency()
+    repair_latency = Latency()
     latency = Latency()
     llm_calls = Latency()
+    categories: dict[str, int] = {}
     errors: list[dict] = []
 
     for case in cases[:limit]:
@@ -438,18 +469,29 @@ def eval_pipeline(cases: list[dict], limit: int = 3) -> dict:
             continue
 
         latency.add((time.perf_counter() - t0) * 1000)
-        llm_calls.add(len([n for n in nodes if n != "execute"]))
+        llm_calls.add(len([n for n in nodes if n not in ("execute", "classify")]))
         execution = merged.get("execution", {}) or {}
-        ok = bool(execution.get("ok")) and bool(
-            execution.get("text") or execution.get("tables") or execution.get("charts"))
+        ok = acceptance_gate(execution)["passed"]
         exec_ok.add(ok)
         attempts = merged.get("attempts", 0) or 0
         if attempts > 1:
             repaired_total += 1
             repaired_ok += int(ok)
+
+        repair = build_self_repair_trace(merged)
+        first_pass.add(bool(repair["first_pass_success"]))
+        repair_attempts.add(repair["repair_attempts"])
+        if repair["error_category"]:
+            categories[repair["error_category"]] = \
+                categories.get(repair["error_category"], 0) + 1
+        if repair["repeated_error"]:
+            reparsed.add(True)
+        if repair["repair_latency_ms"]["count"]:
+            repair_latency.add(repair["repair_latency_ms"]["total_ms"])
         if not ok:
             errors.append({"id": case.get("id"), "error": (execution.get("stderr") or "")[-200:]})
 
+    total = exec_ok.total or 1
     return {
         "status": "ok",
         "cases": exec_ok.total,
@@ -459,6 +501,14 @@ def eval_pipeline(cases: list[dict], limit: int = 3) -> dict:
         "repair_rate": (repaired_ok / repaired_total) if repaired_total else 0.0,
         "latency_ms": latency.as_dict(),
         "llm_calls": llm_calls.as_dict(),
+        # Self-Repair V2 实测指标（与离线仿真分列，口径不会混）
+        "first_pass_success_rate": first_pass.rate,
+        "first_pass_success_hits": first_pass.hits,
+        "avg_repair_attempts": (repair_attempts.as_dict()["avg_ms"] if repair_attempts.samples
+                                else 0.0),
+        "repeated_error_rate": (reparsed.hits / total),
+        "error_categories": categories,
+        "repair_latency_ms": repair_latency.as_dict(),
         "errors": errors,
     }
 
@@ -476,15 +526,25 @@ def run_all(with_pipeline: bool = False, limit: int = 3) -> dict:
     report["replay"] = eval_replay_guard(cases)
     report["retrieval"] = eval_retrieval_admission()
     report["baseline_skills"] = eval_skills(cases, policy="v1")
+    # Self-Repair V2：离线策略仿真（桩化 LLM/沙箱，驱动真实图谱；非实测）
+    report["self_repair_offline"] = eval_self_repair_offline()
 
     if with_pipeline:
         pipeline = eval_pipeline(cases, limit=limit)
         report["end_to_end"] = pipeline
         report["execution"] = pipeline
         report["self_repair"] = (
-            {"status": "ok", "rate": pipeline.get("repair_rate", 0.0),
+            # 实测段：把 pipeline 里的自修复观测独立出来（含首次成功率 / 错误类别 / 复读）
+            {"status": "ok", "measured": True,
+             "rate": pipeline.get("repair_rate", 0.0),
              "cases": pipeline.get("repair_cases", 0),
-             "ok_hits": int(round(pipeline.get("repair_rate", 0.0) * pipeline.get("repair_cases", 0)))}
+             "ok_hits": int(round(pipeline.get("repair_rate", 0.0) * pipeline.get("repair_cases", 0))),
+             "first_pass_success_rate": pipeline.get("first_pass_success_rate", 0.0),
+             "first_pass_success_hits": pipeline.get("first_pass_success_hits", 0),
+             "avg_repair_attempts": pipeline.get("avg_repair_attempts", 0.0),
+             "repeated_error_rate": pipeline.get("repeated_error_rate", 0.0),
+             "error_categories": pipeline.get("error_categories", {}),
+             "repair_latency_ms": pipeline.get("repair_latency_ms", {})}
             if pipeline.get("status") == "ok" else pipeline
         )
     else:
@@ -499,4 +559,4 @@ def run_all(with_pipeline: bool = False, limit: int = 3) -> dict:
 
 __all__ = ["run_all", "eval_semantic", "eval_planning", "eval_skills",
            "eval_replay_guard", "eval_retrieval_admission", "eval_pipeline",
-           "pipeline_blocker"]
+           "eval_self_repair_offline", "pipeline_blocker"]

@@ -30,6 +30,11 @@ pip install -r requirements.txt
 
 # 测试（含 RBAC / 评估门禁）
 pytest -q
+
+# 评估：离线分阶段报告 / Skill 检索对照 / Self-Repair 对照（V1 vs V2）
+python -m backend.evaluation
+python -m backend.evaluation --benchmark
+python -m backend.evaluation --repair-benchmark
 ```
 
 沙箱不可用时，分析 / Skill 重放不可用，其余功能正常。
@@ -45,13 +50,13 @@ pytest -q
 | --- | --- |
 | `backend/routers/` | API 层：参数校验、权限门与路由转发，不写业务逻辑（auth/analysis/sessions/datasources/agents/skills/insights/dashboards/explore/settings/usage/misc） |
 | `backend/auth/` | 认证与 RBAC 领域：`security.py`（pbkdf2 口令 + JWT）、`context.py`（UserContext 解析 + `permission_checker` 唯一权限入口）、`deps.py`（`get_current_context` / `require_permission`） |
-| `backend/agent/` | Agent 内核：`graph.py`（parse_intent → generate_code → execute 自修复 → summarize → followup）、`prompts.py`、`profiler.py`、`sandbox.py`（Docker 沙箱客户端） |
+| `backend/agent/` | Agent 内核：`graph.py`（parse_intent → generate_code → execute → **classify（错误分类 + 验收门）** → summarize → followup）、`repair.py`（**Self-Repair V2**：错误分类 / 定向修复策略 / error signature / 有界重试与复读检测，零 token）、`acceptance.py`（结果验收硬门槛，Self-Repair 与 `analysis/validation.py` 共用）、`prompts.py`、`profiler.py`、`sandbox.py`（Docker 沙箱客户端） |
 | `backend/analysis/` | Analysis Runtime：`runtime.py`（驱动分析链路 + SSE 事件映射 + 落库）、`explore.py`（自助分析，本地零 token） |
 | `backend/skills/` | Skill 领域：`engine.py`（沉淀 / few-shot / 重放执行 + 兜底）、`retrieval.py`（**检索 V2**：Candidate 召回 → 8 路可解释打分 → Replay Admission 准入，全确定性零 token） |
 | `backend/insights/` | 主动洞察：`engine.py` 规则扫描 + LLM 诊断，`scheduler.py` 定时调度 |
 | `backend/datasource/` | 数据源接入：文件 / DB 连接、预览、parquet 物化（数据源归属工作区） |
 | `backend/semantic/` | 语义层运行时：解释 `semantic_packs/`（`registry.py` 加载检索、`render.py` 渲染 prompt、`resolver.py` 确定性解析——零 token 可离线评估） |
-| `backend/evaluation/` | 评估流水线：固定问题集（datasets/）、对抗准入样例（datasets/admission/）、指标聚合（metrics.py）、分阶段运行器（runner.py）、检索基准（retrieval_bench.py）、效率模型（efficiency.py）；CLI：`python -m backend.evaluation [--benchmark|--tune-weights|--with-pipeline]` |
+| `backend/evaluation/` | 评估流水线：固定问题集（datasets/）、对抗准入样例（datasets/admission/）、指标聚合（metrics.py）、分阶段运行器（runner.py）、检索基准（retrieval_bench.py）、**自修复基准（repair_cases.py 场景 + repair_bench.py 离线策略仿真）**、效率模型（efficiency.py）；CLI：`python -m backend.evaluation [--benchmark|--repair-benchmark|--tune-weights|--with-pipeline]` |
 | `backend/report/` | 报告导出：`builder.py` 单轮分析 HTML、`exporter.py` 仪表板导出 |
 | `backend/config.py` `db.py` `models.py` `schemas.py` `seed.py` | 基础设施：全局配置单一入口、SQLite 引擎（WAL）、ORM 与 API 模型、内置种子数据（含 RBAC 角色 / 权限 / 默认工作区 / 管理员） |
 | `tests/` | pytest 套件；`tests/evaluation/` 是评估指标门禁，`tests/test_auth_rbac.py` 是认证 / 工作区 / 权限用例 |
@@ -68,15 +73,16 @@ pytest -q
 1. **LLM 生成的代码只允许在 Docker 沙箱内执行**（`--network none`、CPU/内存限额、只读数据）。永远不要让生成的代码直接跑在宿主机进程里。
 2. **分析数据永远以文件形式进入沙箱 `/data`**：文件源直接挂载；数据库数据先物化为 parquet 缓存再进入沙箱。
 3. **沙箱结果必须通过 `dahelper` JSON 契约返回**（charts/tables/text），不要引入其他返回通道。
-4. **`backend/agent/graph.py` 保持线性 LangGraph 流程**，只允许通过 `AgentState.skill_block` / `AgentState.user_context` 这类最小钩子扩展，不做 tool-calling 重构。
+4. **`backend/agent/graph.py` 保持线性 LangGraph 流程**，只允许通过 `AgentState.skill_block` / `AgentState.user_context` / `AgentState.repair_*` 这类最小钩子扩展，不做 tool-calling 重构。`execute → classify` 是自修复 V2 唯一新增的节点（分类 + 验收门 + 有界重试决策，`backend/agent/repair.py`，零 token、纯确定性）。
 5. **指标定义以语义包为唯一来源**：生成提示词必须经 `backend/semantic/` 注入 `semantic_packs/*.yaml`，防止 LLM 即兴发挥导致口径漂移。
 6. **元数据统一存 SQLite（WAL 模式）**，经 SQLAlchemy 访问，新增表改 `backend/models.py` + `backend/schemas.py`；新增列要同步 `backend/db.py` 的启动迁移。
 7. **后端按领域组织，不按技术分层**：新增能力落到 `auth/ agent/ analysis/ skills/ insights/ datasource/ semantic/ report/` 中对应的领域目录，不要新建 `services/`、`utils/` 这类"什么都放"的目录。
-8. **可观测性跟随运行**：分析链路（含 Skill 重放）的行为变化要同步维护 `Run.trace`（`backend/analysis/runtime.py::_build_trace` / `backend/skills/engine.py::_replay_trace`）与 `backend/analysis/validation.py` 的验收项，失败轮同样留痕。
+8. **可观测性跟随运行**：分析链路（含 Skill 重放）的行为变化要同步维护 `Run.trace`（`backend/analysis/runtime.py::_build_trace` / `build_self_repair_trace` / `backend/skills/engine.py::_replay_trace`）与 `backend/analysis/validation.py` 的验收项，失败轮同样留痕。自修复相关行为的变化必须同时更新 `trace.self_repair`（首次成功 / 修复次数 / 错误类别与指纹 / 策略 / 每轮耗时 / 最终 success|exhausted|fallback）与 Skill 重放的 `not_applicable` 标注。
 9. **指标改动必须过评估门禁**：改语义包解析、Skill 匹配等影响口径/检索的行为后，跑 `python -m backend.evaluation` 并确认 `tests/evaluation/` 阈值不回退；报告里缺资源的阶段如实标注「未采集」，禁止编造数字。
 10. **权限只由后端决定**：Login 只认证；角色 / 权限由 `User → WorkspaceMember → Role → Permission` 实时解析成 UserContext，判断一律走 `permission_checker.has_permission()`，**禁止硬编码角色判断**，LLM 不参与授权。新增业务 router 必须挂 `get_current_context`，写 / 执行类端点必须挂 `require_permission(...)`。
 11. **数据与资产按工作区隔离**：数据源 / Skill / 会话都带 `workspace_id`（Skill 另有 global/workspace/user 作用域），读取与沙箱入口都要按工作区过滤，禁止跨工作区串数据。**user 作用域只看本人**，不走 workspace_id 命中。
 12. **Skill 重放必须过准入，禁止绕过**：任何重放（含手动运行）都要经 `backend/skills/retrieval.py` 的硬约束校验（指标 / 维度 / 分析类型 / 排序方向 / TopN / 时间窗 / 数据源指纹 / 列结构 / 读取函数），并遵循 `AdmissionDecision`；`decision != replay` 时只能走 Agent + few-shot。**宁可放弃重放，也不能错误重放**；重放执行失败必须回退 Agent，不得把错误直接抛给用户。改动检索/准入逻辑后必须重跑 `python -m backend.evaluation --benchmark` 确认 False Replay 仍为 0（`tests/evaluation/test_retrieval_gate.py` 是 CI 门禁）。
+13. **自修复必须有界、定向、可解释**：失败后一律走 `agent/repair.py` 的分类 → 定向处方 → 有界重试流程；复读（错误指纹相同或连续同类）必须提前终止，**任何情况下不得突破 `config.MAX_FIX_ATTEMPTS`**（每类额度只会更早收手）；分类与决策不得调用 LLM（提示词只是换写法，不增加调用次数）；不可修复情形（如沙箱环境不可用）直接兜底为结构化失败，不把异常抛给用户。改动分类规则 / 策略 / 额度后跑 `python -m backend.evaluation --repair-benchmark`，并确认 `tests/evaluation/test_self_repair_eval.py` 门禁不回退。**离线仿真必须标注 `measured=false`**，真实执行 / 自修复指标在缺资源时如实标「未采集」。
 
 ## 按需阅读的规则索引
 

@@ -221,6 +221,50 @@ def render_report(report: dict) -> str:
                           f"画像来源 {e2['profile']['source']}", indent=1))
         lines.append(_row("└ 沙箱耗时", "未采集", "需 Docker 实测，不编造数字", indent=1))
 
+    sr = report.get("self_repair_offline", {})
+    if sr.get("status") == "ok":
+        v1, v2 = sr["v1"], sr["v2"]
+        lines.append("-" * 66)
+        lines.append("Self-Repair V2（离线策略仿真：桩化 LLM/沙箱，驱动真实图谱；"
+                     "非实测，measured=false）")
+        lines.append(_row("首次执行成功率", _pct(v2["first_pass_success_rate"]),
+                          f"({v2['first_pass_success_hits']}/{v2['queries']})  "
+                          f"V1 {_pct(v1['first_pass_success_rate'])}"))
+        lines.append(_row("修复成功率", _pct(v2["repair_success_rate"]),
+                          f"({v2['repair_success_hits']}/{v2['repair_cases']} 条需修复)  "
+                          f"V1 {_pct(v1['repair_success_rate'])}", indent=1))
+        lines.append(_row("总成功率", _pct(v2["overall_success_rate"]),
+                          f"V1 {_pct(v1['overall_success_rate'])}  "
+                          f"Δ {_pp(v2['overall_success_rate'] - v1['overall_success_rate'])}"))
+        lines.append(_row("平均修复次数", f"{v2['avg_repair_attempts']:.2f}",
+                          f"V1 {v1['avg_repair_attempts']:.2f}", indent=1))
+        lines.append(_row("复读检测率 / 修复耗尽率",
+                          f"{_pct(v2['repeated_error_rate'])}/{_pct(v2['repair_exhaustion_rate'])}",
+                          f"V1 {_pct(v1['repeated_error_rate'])}/{_pct(v1['repair_exhaustion_rate'])}",
+                          indent=1))
+        lines.append(_row("不可修复直接兜底率", _pct(v2["fallback_rate"]),
+                          f"V1 {_pct(v1['fallback_rate'])}（环境不可用仍硬重试）", indent=1))
+        lines.append(_row("LLM 调用 / 查询", f"{v2['llm_calls_per_query']:.2f}",
+                          f"V1 {v1['llm_calls_per_query']:.2f}  "
+                          f"Δ {_signed(v2['llm_calls_per_query'] - v1['llm_calls_per_query'], 2)}",
+                          indent=1))
+        lines.append(_row("Token / 查询", f"{v2['tokens_per_query']:.0f}",
+                          f"V1 {v1['tokens_per_query']:.0f}", indent=1))
+        lat2, lat1 = v2["repair_latency_ms"], v1["repair_latency_ms"]
+        lines.append(_row("修复耗时 p50 / p95",
+                          f"{lat2['p50_ms']}/{lat2['p95_ms']} ms",
+                          f"V1 {lat1['p50_ms']}/{lat1['p95_ms']} ms"
+                          "（折算常量，非实测）", indent=1))
+        guard = sr.get("replay_guard") or {}
+        lines.append(_row("Skill 重放不进自修复",
+                          f"{guard.get('passed', 0)}/{guard.get('cases', 0)} 断言通过",
+                          "重放成功 = 0 修复 / 0 LLM", indent=1))
+        lines.append(_row("└ 场景期望一致率", _pct(v2.get("expectation_pass_rate", 0.0)),
+                          f"{sr['dataset']['scenarios']} 条场景 / "
+                          f"{len(sr['dataset']['kinds'])} 类错误", indent=1))
+    elif sr.get("status") == "error":
+        lines.append(_row("Self-Repair 离线仿真", "未采集", sr.get("reason", "")))
+
     lines.append("-" * 66)
     lines.append("以下阶段需要 Docker 沙箱 / LLM，资源缺失时显示「未采集」而非编造数字：")
     for key, label in (("execution", "代码执行成功率"), ("self_repair", "自修复成功率"),
@@ -231,6 +275,8 @@ def render_report(report: dict) -> str:
             lat = stage.get("latency_ms") or {}
             if lat.get("p50_ms"):
                 extra += f"  延迟 p50 {lat['p50_ms']} ms"
+            if stage.get("first_pass_success_rate") is not None:
+                extra += f"  首次成功率 {_pct(stage['first_pass_success_rate'])}"
             calls = stage.get("llm_calls") or {}
             if calls.get("avg_ms"):
                 extra += f"  平均节点数 {calls['avg_ms']}"

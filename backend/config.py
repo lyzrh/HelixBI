@@ -44,6 +44,17 @@ SANDBOX_CPUS = float(os.getenv("SANDBOX_CPUS", "2"))
 SANDBOX_MEMORY = os.getenv("SANDBOX_MEMORY", "2g")
 CODE_TIMEOUT_SECONDS = int(os.getenv("CODE_TIMEOUT_SECONDS", "120"))
 
+# ---- Self-Repair（错误分类 → 定向修复 → 有界重试 → 兜底）----
+#
+# MAX_FIX_ATTEMPTS 仍是**唯一全局上限**（每类错误的独立额度只会在它之内更早收手），
+# 语义与旧版一致：最多执行 1 + MAX_FIX_ATTEMPTS 次。
+#
+# REPAIR_POLICY=v1 是冻结的 Baseline（无差别重试、不分类、不复读检测），
+# 只为 `--repair-benchmark` 的 V1 vs V2 对照存在，线上不要用。
+REPAIR_POLICY = os.getenv("REPAIR_POLICY", "v2")
+# 允许的「连续同类错误」次数：1 = 第二次同类错误即视为修复无进展，提前终止重试
+REPAIR_REPEAT_LIMIT = int(os.getenv("REPAIR_REPEAT_LIMIT", "1"))
+
 # ---- 数据接入 ----
 
 # DB 数据源物化上限（沙箱无网络，分析数据一律以文件进入 /data）
@@ -131,7 +142,8 @@ __all__ = [
     "LLM_PRICE_INPUT_PER_MTOK", "LLM_PRICE_OUTPUT_PER_MTOK",
     "LLM_TEMPERATURE", "MATERIALIZED_DIR", "MATERIALIZED_MAX_ROWS",
     "MATERIALIZED_TTL_HOURS", "MAX_FIX_ATTEMPTS", "MAX_UPLOAD_MB", "MODEL_NAME",
-    "OPENAI_API_KEY", "OPENAI_BASE_URL", "PROJECT_ROOT", "RUNS_DIR",
+    "OPENAI_API_KEY", "OPENAI_BASE_URL", "PROJECT_ROOT", "REPAIR_POLICY",
+    "REPAIR_REPEAT_LIMIT", "RUNS_DIR",
     "SANDBOX_CPUS", "SANDBOX_IMAGE", "SANDBOX_MEMORY", "SEMANTIC_PACKS_DIR",
     "SKILL_ADMISSION_HIGH", "SKILL_ADMISSION_LOW", "SKILL_ADMISSION_MARGIN",
     "SKILL_RETRIEVAL_MIN_SCORE", "SKILL_RETRIEVAL_TOP_K", "SKILL_RETRIEVAL_WEIGHTS",

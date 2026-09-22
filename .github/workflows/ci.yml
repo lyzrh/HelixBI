@@ -47,6 +47,44 @@ jobs:
               print(f"评估门禁未通过：{failed}")
               sys.exit(1)
           PY
+      # Self-Repair 门禁：离线策略仿真（桩化 LLM/沙箱、驱动真实图谱）必须自证不是实测，
+      # 且 V2 的成功率高于基线、重试与 LLM 调用低于基线、上限未被放大、重放不进自修复。
+      - name: Self-Repair Benchmark (Baseline vs V2)
+        run: python -m backend.evaluation --repair-benchmark --json /tmp/repair.json
+      - name: Self-Repair regression gate
+        run: |
+          python - <<'PY'
+          import json, sys
+          r = json.load(open('/tmp/repair.json'))
+          v1, v2 = r['v1'], r['v2']
+          limit = 1 + r['dataset']['max_fix_attempts']
+          checks = [
+              ("仿真自证非实测",
+               r['measured'] is False and r['mode'] == 'offline_simulation'),
+              ("修复成功率不低于基线",
+               v2['repair_success_rate'] >= v1['repair_success_rate']),
+              ("总成功率 ≥ 70%", v2['overall_success_rate'] >= 0.70),
+              ("总成功率优于基线",
+               v2['overall_success_rate'] > v1['overall_success_rate']),
+              ("平均修复次数少于基线",
+               v2['avg_repair_attempts'] < v1['avg_repair_attempts']),
+              ("LLM 调用少于基线",
+               v2['llm_calls_per_query'] < v1['llm_calls_per_query']),
+              ("场景判定与设计期望 100% 一致", v2['expectation_pass_rate'] == 1.0),
+              ("MAX_FIX_ATTEMPTS 上限未被放大",
+               all(o['executions'] <= limit and
+                   o['repair_attempts'] <= r['dataset']['max_fix_attempts']
+                   for o in v2['outcomes'])),
+              ("Skill 重放不进自修复",
+               r['replay_guard']['passed'] == r['replay_guard']['cases']),
+          ]
+          failed = [name for name, ok in checks if not ok]
+          for name, ok in checks:
+              print(f"[{'PASS' if ok else 'FAIL'}] {name}")
+          if failed:
+              print(f"Self-Repair 门禁未通过：{failed}")
+              sys.exit(1)
+          PY
 
   frontend:
     runs-on: ubuntu-latest

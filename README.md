@@ -28,6 +28,7 @@ Sign in → pick a workspace (role / permissions / data scope follow)
   → Connect data (files / databases, owned by the workspace)
   → Ask in chat (optional metric confirmation)
   → SSE streaming analysis (Skill hit: instant replay / miss: LLM codegen + self-repair)
+      · Self-Repair V2: classify the error → targeted repair → bounded retry → fallback
   → Conclusions + charts + tables + follow-ups
   → Captured as Skills / pinned to dashboards
   → Scheduled insight scans → LLM business diagnosis → dashboards → exported reports
@@ -60,7 +61,7 @@ can always connect your own data.
 | Module | Capabilities |
 | --- | --- |
 | **Auth & RBAC** | Username / email + password sign-in (JWT) + self-registration (grants no roles); UserContext resolved from user → workspace membership → role → permissions, so the *same person can be an analyst in one workspace and a viewer in another*; 11 permission points across datasources / SQL / analysis / dashboards / skills / membership; admins manage members visually (add / re-role / remove, last-admin protection); authorization always enforced server-side — bypassing the UI still gets rejected |
-| **Conversational Analysis** | Ask in natural language; SSE streams step progress / code / terminal / charts / tables / conclusions; "confirm query first" mode lets you edit the QuerySpec before execution; automatic failure repair with retries (up to 3); one-click suggested follow-ups |
+| **Conversational Analysis** | Ask in natural language; SSE streams step progress / code / terminal / charts / tables / conclusions; "confirm query first" mode lets you edit the QuerySpec before execution; **Self-Repair V2** on failure (classify the error → inject a targeted repair hint → bounded retry with repeat detection → structured fallback); one-click suggested follow-ups |
 | **Self-Service Analytics** | Click / drag fields for instant charts (ECharts interactive rendering, fully local — zero tokens); switch freely among bar / line / pie / area / scatter / stacked charts; adjustable aggregation and sorting |
 | **Scenario Agents** | Pre-built industry experts for retail sales and manufacturing production: bound semantic packs and datasources, opening messages, suggested questions, start/stop management — ready to chat out of the box |
 | **Skill Library** | Verified analysis paths are automatically captured as reusable Skills; **retrieval V2** scores candidates with 8 explainable signals and gates replay on metrics / dimensions / analysis type / sort direction / Top-N / time window / datasource fingerprint — a hit replays in sub-seconds with **zero LLM calls**, a miss or a failed replay safely returns to the full Agent; `global / workspace / user` scopes prevent cross-workspace leakage; usage / success-rate statistics |
@@ -70,7 +71,7 @@ can always connect your own data.
 | **Semantic Layer** | Industry semantic packs define metrics (with derived formulas: yield, attainment rate, average order value, etc.), dimensions, synonyms, time conventions, and chart suggestions — injected into generation prompts to keep definitions consistent |
 | **Settings Center** | Hot-reload LLM endpoints (DeepSeek / Zhipu / Qwen / any OpenAI-compatible API — takes effect on save, no restart); preferences (answer style / creativity / follow-up toggle / custom instructions); **UI language toggle (中文 / English)** — applies instantly to navigation / workbench / settings, persisted locally; profile |
 | **Reliability** | Network-isolated sandbox + CPU / memory limits + read-only data; `dahelper` JSON contract for returning results; SQLite metadata store in WAL mode; authorization enforced three times: API layer, runtime entry, before tool execution |
-| **Evaluation** | 65 fixed questions (retail / manufacturing / colloquial adversarial cases) + staged metric reports (semantic resolution / context injection / skill matching / replay admission); metric thresholds wired into pytest as CI gates |
+| **Evaluation** | 65 fixed questions (retail / manufacturing / colloquial adversarial cases) + **12 self-repair failure scenarios** (syntax / missing column / type / empty result / timeout / OOM / repeated error / multi-error / budget exhausted / acceptance-not-passed / sandbox unavailable / replay never repairs) + staged metric reports (semantic resolution / context injection / skill matching / replay admission / self-repair); metric thresholds wired into pytest as CI gates |
 | **Observability** | Every analysis run persists a `Run.trace`: per-stage latencies, LLM calls & tokens, skill hit mode, six result-acceptance checks, and **the acting user / workspace / role**; the frontend "run timeline" panel exposes it — skill replay's `LLM calls == 0` is data, not copy |
 
 ## Auth & RBAC
@@ -162,6 +163,14 @@ Skill Retrieval V2 (full path-signature grain: pack / metrics / dimensions / typ
   False Replay Rate                    0.0%    (baseline 4.6% — 3 cases → 0)
   Admission accuracy (adversarial)     100.0%  (20 cases; baseline 50.0%, false accepts 10 → 0)
   LLM calls / query                    0.09    (0.09 counting mis-replays; baseline 0.14)
+Self-Repair V2 (offline policy simulation: stubbed LLM/sandbox, real graph; NOT measured)
+  First-pass success rate              8.3%    (1/12)               baseline 8.3%
+  Repair success rate                  80.0%   (8/10 needed)        baseline 18.2%
+  Overall success rate                 75.0%                        baseline 25.0%
+  Average repair attempts              1.17                         baseline 2.67
+  Repeated-error / exhaustion rate     8.3% / 16.7%                 baseline 0.0% / 75.0%
+  LLM calls / tokens per query         5.00 / 2785                  baseline 6.08 / 4218
+  Replay never enters self-repair      2/2 assertions pass          replay = 0 repair / 0 LLM
 Execution / self-repair / end-to-end    needs the Docker sandbox; "not collected"
                                         when unavailable
 ```
@@ -202,6 +211,43 @@ Full baseline-vs-V2 table, weight calibration and open issues:
 [`docs/skill-retrieval-v2.md`](docs/skill-retrieval-v2.md)
 (reproduce with `python -m backend.evaluation --benchmark`).
 
+### Agent Self-Repair V2 (classify → targeted repair → bounded retry → fallback)
+
+The old self-repair had a single path: on failure, the same prompt (`FIX_USER_TMPL`) plus stderr
+went back to the LLM, up to `MAX_FIX_ATTEMPTS` times. Three gaps: **the prompt ignored the cause**
+(a missing column, a dtype error, a timeout and an empty result all got the same generic advice),
+**repeats were not detected** (the identical traceback burned yet another LLM call), and **nothing
+was explainable** (`attempts=3` cannot say why).
+
+V2 inserts a deterministic (zero-token) `classify` node after `execute`:
+
+```
+execute → classify (error classification + result-acceptance gate)
+            ├─ acceptance passed ────────────────────────→ summarize
+            ├─ repairable with budget → targeted hint ───→ generate_code (loop)
+            └─ repeated / budget exhausted / not repairable → summarize (structured failure)
+```
+
+- **Classification**: syntax / name / missing column / type-value / empty result / timeout /
+  resource limit / result contract / unknown / sandbox environment — preferring structured facts
+  (`exit_code`, `timed_out`, `failure_kind`) over guessing from stderr wording.
+- **Targeted repair**: each category gets its own hint (missing column → align with the real schema
+  and the semantic layer; type → fix dtypes and conversions; empty result → check filters, time
+  range and field values; syntax → fix code structure only; timeout/OOM → cut compute and memory),
+  plus a short history of previous failures — **still a single LLM call**.
+- **Bounded retry**: an identical error signature stops immediately; a repeated category counts as
+  no progress and stops early; every category has its own budget; the global cap remains
+  `MAX_FIX_ATTEMPTS` (at most 4 executions).
+- **One acceptance gate**: `execution_ok + has_artifact` lives in `backend/agent/acceptance.py` and
+  is shared by Self-Repair and `validate_final` — which also closed the old "an empty result table
+  counts as success" hole.
+
+Problem → Baseline → Optimization → Benchmark → Result, the classification table, the retry/stop
+policy, a real trace example and the honest caveats:
+[`docs/self-repair-v2.md`](docs/self-repair-v2.md); reproduce with
+`python -m backend.evaluation --repair-benchmark` (add `--repair-live` to collect real metrics
+when Docker + an LLM key are available).
+
 ## Observability
 
 Every run (including skill replays) persists a `Run.trace`:
@@ -211,6 +257,10 @@ Every run (including skill replays) persists a `Run.trace`:
 - **Skill retrieval record**: candidate Skills with their 8 signal scores, the selected Skill,
   the admission verdict plus rejection reason, and whether it replayed or fell back to the
   Agent — "why was this not replayed / why was this Skill chosen" is answerable from the trace
+- **Self-repair record**: the `self_repair` section stores whether the first pass succeeded, how
+  many repairs ran, each round's error category / signature / strategy / duration, and the final
+  `success | exhausted | fallback` — "why did this run need two repairs" is answerable from the
+  trace alone (replay rounds are marked `not_applicable`)
 - **Result acceptance**: execution ok / has artifacts / answer present / chart files really exist / well-formed tables / clean stderr — six checks decoupled from the boolean `ok`
 - **Actor**: the user / workspace / role behind the run, for per-person and per-workspace auditing
 - **Failures leave traces too**: failed runs write the same trace — that's the round you most want to inspect
@@ -238,7 +288,9 @@ logic lives in the domain modules.
 │              (carries the sign-in and permission gates)       │
 │  auth/       authentication & RBAC: UserContext resolution +  │
 │              the single permission-check entry                │
-│  agent/      Agent core: graph (LangGraph) + sandbox client   │
+│  agent/      Agent core: graph (LangGraph) + repair (error    │
+│              classification / targeted fixes / bounded retry) │
+│              + acceptance (gate) + sandbox client             │
 │  analysis/   Analysis Runtime (driving + persistence) +       │
 │              self-service analytics (zero tokens)             │
 │  skills/     Skill capture / retrieval / replay / few-shot    │
@@ -251,8 +303,9 @@ logic lives in the domain modules.
 │    skills/insights/dashboards/settings/token usage            │
 └───────────────────────────┬──────────────────────────────────┘
                             ▼
-        LangGraph core (parse_intent → generate_code
-          → execute → self-repair loop → summarize → followup)
+        LangGraph core (parse_intent → generate_code → execute
+          → classify (error class + acceptance gate)
+          → targeted repair loop → summarize → followup)
                             ▼
         Docker sandbox: --network none, CPU/memory limits, read-only /data
         File datasources mounted directly; database data materialized
@@ -359,12 +412,16 @@ backend/                # FastAPI service (organised by business domain)
   auth/                 # authentication & RBAC: security (password + JWT), context
                         #   (UserContext + permission_checker), deps (sign-in / permission gates)
   agent/                # Agent core: graph prompts profiler sandbox
+                        #   + repair (error classification / targeted repair / bounded retry)
+                        #   + acceptance (shared hard gate for validation & self-repair)
   analysis/             # Analysis Runtime (runtime) + self-service (explore)
   skills/               # Skill capture / retrieval (score+admit) / replay (scope-isolated)
   insights/             # rule scans (engine) + scheduler
   datasource/           # file / DB access + parquet materialization
   semantic/             # semantic-pack runtime (registry + render + resolver)
-  evaluation/           # evaluation pipeline: datasets / metrics / runner (python -m backend.evaluation)
+  evaluation/           # evaluation pipeline: datasets / metrics / runner / retrieval bench
+                        #   + self-repair bench (repair_cases + repair_bench)
+                        #   (python -m backend.evaluation [--benchmark|--repair-benchmark])
   report/               # export (builder for runs / exporter for dashboards)
 semantic_packs/         # industry semantic packs (retail_sales / manufacturing_production yaml)
 sandbox/                # standalone execution environment: sandbox image
@@ -441,7 +498,7 @@ execution, self-repair, and follow-up recommendation.
 ## Roadmap
 
 - **R2**: dashboards rendered client-side (interactive ECharts instead of PNG), insight subscription push, i18n for the remaining pages (the zh/en toggle already covers navigation / workbench / settings; the sign-in page and workspace selector are still Chinese-only); ~~multi-user support & permissions~~ (✅ shipped: sign-in / workspaces / UserContext / RBAC — see "Auth & RBAC")
-- **R3**: ~~regression evaluation~~ (✅ shipped: `backend/evaluation/` + `tests/evaluation/` gates; next: grow the question set and collect sandbox-execution / self-repair metrics), visual semantic-pack editor, metric lineage
+- **R3**: ~~regression evaluation~~ (✅ shipped: `backend/evaluation/` + `tests/evaluation/` gates; next: grow the question set and collect sandbox-execution metrics), visual semantic-pack editor, metric lineage
 - **Security hardening (P1)**: authenticate the static artifact mounts (`/runs`, `/uploads`, `/data` are currently open), encrypt stored database passwords, refresh tokens & a revocation list, finer-grained permissions for agent / settings endpoints
 - **Architecture (P2)**: `backend/routers/` → `api/` and `config/db/models/schemas` → `core/`; introduce `features/` domains in the frontend (see [.agents/rules/architecture.md](.agents/rules/architecture.md))
 

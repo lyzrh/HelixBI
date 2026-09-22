@@ -47,6 +47,13 @@ def _print_failures(report: dict) -> None:
     pipeline = report.get("end_to_end") or {}
     for item in (pipeline.get("errors") or [])[:5]:
         print(f"\n[端到端] {item.get('id')} 失败：{item.get('error')}")
+    sr = report.get("self_repair_offline") or {}
+    for policy in ("v1", "v2"):
+        fails = (sr.get(policy) or {}).get("expectation_failures") or []
+        if fails:
+            print(f"\n[Self-Repair/{policy}] 与场景设计期望不一致：")
+            for item in fails[:5]:
+                print(f"  - {item['id']}: {'; '.join(item['issues'])}")
 
 
 def _run_benchmark(args) -> int:
@@ -62,6 +69,36 @@ def _run_benchmark(args) -> int:
         Path(args.json_path).write_text(
             json.dumps(bench.public_view(result), ensure_ascii=False, indent=2),
             encoding="utf-8")
+        print(f"\n已写出 JSON：{args.json_path}")
+    return 0
+
+
+def _run_repair_benchmark(args) -> int:
+    """Self-Repair V1 vs V2 对照：默认离线策略仿真，--repair-live 时追加真实实测。"""
+    from backend.evaluation import repair_bench as bench
+
+    if args.repair_live:
+        live = bench.live_evaluate(limit=args.limit)
+        if live.get("status") == "skipped":
+            print(f"[实测] 未采集：{live['reason']}")
+        else:
+            print("[实测] 真实链路指标：")
+            print(json.dumps({k: v for k, v in live.items() if k != "outcomes"},
+                             ensure_ascii=False, indent=2))
+        print()
+
+    result = bench.evaluate()
+    markdown = bench.render_markdown(result)
+    print(markdown)
+    if args.markdown:
+        Path(args.markdown).write_text(markdown + "\n", encoding="utf-8")
+        print(f"\n已写出 Markdown：{args.markdown}")
+    if args.json_path:
+        payload = bench.public_view(result)
+        if args.repair_live:
+            payload["live"] = bench.live_evaluate(limit=args.limit)
+        Path(args.json_path).write_text(
+            json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
         print(f"\n已写出 JSON：{args.json_path}")
     return 0
 
@@ -101,6 +138,10 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--benchmark", action="store_true",
                         help="只跑 Skill Retrieval Baseline vs V2 对照（Markdown 表格）")
     parser.add_argument("--markdown", default="", help="--benchmark 的 Markdown 输出路径")
+    parser.add_argument("--repair-benchmark", action="store_true",
+                        help="只跑 Self-Repair Baseline(V1) vs V2 对照（离线策略仿真）")
+    parser.add_argument("--repair-live", action="store_true",
+                        help="配合 --repair-benchmark：追加真实链路实测（需 Docker + LLM）")
     parser.add_argument("--top-k", type=int, default=5, help="Recall@K 的 K（默认 5）")
     parser.add_argument("--tune-weights", action="store_true", help="标定检索权重")
     parser.add_argument("--sensitivity", action="store_true",
@@ -110,6 +151,8 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.benchmark:
         return _run_benchmark(args)
+    if args.repair_benchmark:
+        return _run_repair_benchmark(args)
     if args.tune_weights:
         return _run_tuning(args)
 

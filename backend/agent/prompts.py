@@ -92,6 +92,12 @@ def generate_user_prompt(
     return "\n\n".join(blocks)
 
 
+# 自修复提示：基础上下文（上次代码 / 输出 / 报错 / 可用文件）+ **按错误类型定制的处方**。
+#
+# Self-Repair V1 把四种完全不同的病因（列名错、dtype 错、超时、空结果）塞进同一段
+# "请分析错误原因"，V2 把最后一段换成 `{repair_hint}`——由 backend/agent/repair.py
+# 依据错误分类给出的定向处方（列名 → 对齐真实 schema；类型 → 转换链路；超时 → 降计算量…）。
+# 仍然是**同一次** LLM 调用，没有额外 token 开销，只是提示更有针对性。
 FIX_USER_TMPL = """上一次执行的代码失败或结果不完整，请修复。
 
 ## 上次代码
@@ -112,7 +118,34 @@ FIX_USER_TMPL = """上一次执行的代码失败或结果不完整，请修复�
 ## 可用文件（/data/ 下，真实文件名）
 {files_block}
 
-请分析错误原因，输出修复后的完整代码（格式要求不变：计划 + ```python 代码块）。若错误与列名有关（如 KeyError），请对照「数据概况」与语义层检查列名的拼写、大小写与前后空格。"""
+## 历史失败（同样的错误不要重复犯）
+{repair_history}
+
+{repair_hint}"""
+
+
+def repair_history_block(previous_errors: list[dict] | None) -> str:
+    """把之前几轮的失败（类别 + 指纹 + 策略）压成几行，避免 LLM 重蹈覆辙。"""
+    errors = list(previous_errors or [])
+    if not errors:
+        return "（这是第一次修复）"
+    lines = []
+    for i, err in enumerate(errors[-3:], start=1):
+        lines.append(
+            f"{i}. [{err.get('label') or err.get('category')}] {err.get('message', '')[:160]}"
+            f"　已尝试策略：{err.get('strategy') or '（无）'}"
+        )
+    return "\n".join(lines)
+
+
+def repair_user_prompt(code: str, stdout: str, stderr: str, files_block: str,
+                       repair_hint: str, previous_errors: list[dict] | None = None) -> str:
+    """构造一次自修复的 user 消息（基础上下文 + 定向处方）。"""
+    return FIX_USER_TMPL.format(
+        code=code, stdout=stdout, stderr=stderr, files_block=files_block,
+        repair_history=repair_history_block(previous_errors),
+        repair_hint=repair_hint,
+    )
 
 
 SUMMARIZE_SYSTEM = """你是数据分析助手，负责把沙箱执行结果整理成给用户看的中文结论。

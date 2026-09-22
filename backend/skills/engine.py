@@ -16,6 +16,7 @@ import time
 import uuid
 from pathlib import Path
 
+from backend.agent.acceptance import acceptance_gate
 from backend.agent.sandbox import run_in_sandbox
 from backend.db import SessionLocal
 from backend.models import (
@@ -326,7 +327,7 @@ def _replay(db, skill, session_id, data_source_ids, files, emit, t0,
         "charts": _chart_urls(execution), "tables": execution["tables"],
         "text": execution["text"],
     })
-    ok = execution["ok"] and bool(execution["text"] or execution["tables"] or execution["charts"])
+    ok = acceptance_gate(execution)["passed"]
     answer = execution["text"] or "（重放完成，请查看图表与结果表）"
     emit("answer", {"answer": answer})
     emit("charts", {"charts": _chart_urls(execution)})
@@ -391,6 +392,21 @@ def _replay_trace(run_pk: int, skill, execution: dict, answer: str,
                      "resolved_metrics": [], "resolved_dimensions": []},
         "skill": skill_block,
         "execution": {"ok": ok, "attempts": 1, "repair_count": 0, "sandboxed": True},
+        # 重放路径**不进自修复**：这条记录是"Skill 高置信重放仍然零 LLM"的第二个证据
+        # （第一个是 llm.calls == 0）。重放失败时不在这里修，而是整体 fallback 到 Agent。
+        "self_repair": {
+            "policy": "not_applicable", "outcome": "success" if ok else "fallback",
+            "repair_status": "not_applicable", "repair_attempts": 0,
+            "max_fix_attempts": 0, "executions": 1,
+            "first_pass_success": bool(ok), "error_category": "" if ok else "replay_failed",
+            "error_label": "" if ok else "重放执行失败", "error_signature": "",
+            "repair_strategy": "", "repair_reason": "Skill 重放路径不进入 Self-Repair",
+            "repeated_error": False, "repeat_kind": "", "error_chain": [],
+            "errors": {"count": 0, "by_category": {}, "repeat_count": 0, "signatures": []},
+            "attempts": [], "repair_latency_ms": {"count": 0, "p50_ms": 0, "p95_ms": 0,
+                                                  "max_ms": 0, "total_ms": 0},
+            "llm": {"calls": 0, "input_tokens": 0, "output_tokens": 0, "cost_usd": 0.0},
+        },
         "llm": {"calls": 0, "input_tokens": 0, "output_tokens": 0,
                 "cost_usd": 0.0, "by_node": {}},
         "validation": validate_final({"execution": execution, "answer": answer}),

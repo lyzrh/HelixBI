@@ -12,6 +12,7 @@ import urllib.parse
 from pathlib import Path
 
 from backend import config
+from backend.agent.acceptance import acceptance_gate
 from backend.agent.graph import NODE_LABELS, stream_analysis
 from backend.agent.sandbox import run_in_sandbox
 from backend.analysis.validation import validate_final
@@ -85,6 +86,14 @@ def run_analysis_stream(
                     "stages": stages, "final_status": "failed",
                     "validation": {"status": "fail", "checks": [],
                                    "failed": ["runtime_error"]},
+                    # 链路整体异常（未进入沙箱）：不是"修不修"的问题，如实标注原因
+                    "self_repair": {"policy": config.REPAIR_POLICY, "outcome": "runtime_error",
+                                    "repair_status": "not_applicable", "repair_attempts": 0,
+                                    "executions": 0, "first_pass_success": False,
+                                    "error_category": "runtime", "error_signature": "",
+                                    "repair_strategy": "", "repair_reason": str(exc)[:300],
+                                    "attempts": [], "repair_latency_ms": _latency_stats([]),
+                                    "llm": _llm_stats(run_pk)},
                     "error": str(exc)[:500],
                 })
                 db.commit()
@@ -189,6 +198,11 @@ def _drive(run_pk, question, files, history, spec, semantic_block, skill_block, 
             stage["attempt"] = merged.get("attempts", 0)
         elif node == "generate_code":
             stage["attempt"] = merged.get("attempts", 0)
+        elif node == "classify":
+            # 自修复决策进 stages：时间线里就能看出"这一轮是修还是不修、按什么类别修"
+            stage["error_category"] = merged.get("error_category", "")
+            stage["repair_status"] = merged.get("repair_status", "")
+            stage["repair_strategy"] = merged.get("repair_strategy", "")
         stages.append(stage)
         last = now
 
@@ -221,6 +235,24 @@ def _emit_node_done(emit, node, delta, merged):
             "tables": execution.get("tables") or {},
             "text": execution.get("text") or "",
         })
+    elif node == "classify":
+        # 分类结论直接作为可视化步骤的说明文字（前端 step.detail 已支持）
+        from backend.agent import repair as repair_mod
+
+        category = merged.get("error_category", "")
+        status = merged.get("repair_status", "")
+        if status == repair_mod.STATUS_REPAIRING:
+            label = repair_mod.CATEGORY_LABELS.get(category, category)
+            strategy = merged.get("repair_strategy", "")
+            emit("step", {"node": "classify",
+                          "label": f"识别为「{label}」→ 定向修复（{strategy}）",
+                          "status": "done"})
+        else:
+            emit("step", {"node": "classify",
+                          "label": "自修复决策",
+                          "status": "done",
+                          "detail": merged.get("repair_reason", "") or
+                                    f"状态：{status}"})
     elif node == "summarize":
         emit("answer", {"answer": delta.get("answer", "")})
     elif node == "suggest_followups":
@@ -229,18 +261,17 @@ def _emit_node_done(emit, node, delta, merged):
 
 
 def _predict_next(node: str, merged: dict) -> str | None:
+    """下一步提示（只为 UI 提前显示"正在做什么"，路由真值在 LangGraph 的边里）。"""
     if node == "parse_intent":
         return "generate_code"
     if node == "generate_code":
         return "execute"
     if node == "execute":
-        execution = merged.get("execution", {})
-        has_output = any([execution.get("text"), execution.get("tables"),
-                          execution.get("charts")])
-        if execution.get("ok") and has_output:
-            return "summarize"
-        from backend.config import MAX_FIX_ATTEMPTS
-        if merged.get("attempts", 0) <= MAX_FIX_ATTEMPTS:
+        return "classify"
+    if node == "classify":
+        from backend.agent import repair as repair_mod
+
+        if merged.get("repair_status") == repair_mod.STATUS_REPAIRING:
             return "generate_code"
         return "summarize"
     if node == "summarize":
@@ -257,8 +288,8 @@ def _persist_result(db, run_pk, session_id, question, data_source_ids,
         raise RuntimeError(f"run {run_pk} 不存在")
     execution = final.get("execution", {})
     charts = _chart_urls(execution)
-    ok = bool(execution.get("ok")) and bool(
-        execution.get("text") or execution.get("tables") or execution.get("charts"))
+    # 验收门与 Self-Repair 同源（backend.agent.acceptance）：空结果表不算产物
+    ok = acceptance_gate(execution)["passed"]
 
     run.status = "done" if ok else "failed"
     run.spec = jdump(final.get("spec") or {})
@@ -281,6 +312,11 @@ def _persist_result(db, run_pk, session_id, question, data_source_ids,
         "followups": final.get("followups") or [], "spec": final.get("spec") or {},
         "attempts": final.get("attempts", 0), "ok": ok, "code": final.get("code", ""),
         "plan": final.get("plan", ""),
+        "self_repair": {
+            "outcome": (trace or {}).get("self_repair", {}).get("outcome", ""),
+            "repair_attempts": (trace or {}).get("self_repair", {}).get("repair_attempts", 0),
+            "error_category": (trace or {}).get("self_repair", {}).get("error_category", ""),
+        },
     }
     msg = Message(session_id=session_id, role="assistant",
                   content=final.get("answer", "") or "（分析未产生结论，请查看执行日志）",
@@ -318,6 +354,7 @@ def _build_trace(run_pk, question, t0, stages, final, semantic_meta,
             "role": user_context.get("role"),
         }
 
+    llm_stats = _llm_stats(run_pk)
     return {
         "run_id": run_pk,
         "question": question,
@@ -341,10 +378,94 @@ def _build_trace(run_pk, question, t0, stages, final, semantic_meta,
             "repair_count": max(attempts - 1, 0),
             "sandboxed": True,
         },
-        "llm": _llm_stats(run_pk),
+        # Self-Repair V2 的观测段：能回答"为什么这个 Agent 修了 2 次才成功"
+        "self_repair": build_self_repair_trace(final, llm_stats),
+        "llm": llm_stats,
         "validation": validation,
         "final_status": "done" if validation["status"] != "fail" else "failed",
     }
+
+
+def build_self_repair_trace(final: dict, llm: dict | None = None) -> dict:
+    """把 Self-Repair 的决策链写进 trace（确定性、只读 state 字段，零额外开销）。
+
+    回答四类问题：
+    1. **成功了几次就成**——`first_pass_success`（首轮即通过验收）；
+    2. **为什么修**——`error_category / error_signature / repair_strategy` 与每轮的错误序列；
+    3. **修了多久**——`attempts[].duration_ms` 与 `repair_latency_ms` 的 p50 / p95
+       （口径：一次 repair 决策 → 下一轮执行结论，含 LLM 重新生成 + 沙箱执行）；
+    4. **最后怎么收场**——`outcome`（success / exhausted / fallback）+ `repair_status`
+       + `stop_reason`，以及整轮的 LLM calls / tokens / cost。
+    """
+    from backend.agent import repair as repair_mod
+
+    execution = (final or {}).get("execution") or {}
+    passed = acceptance_gate(execution)["passed"]
+    attempts = final.get("attempts", 0) or 0
+    history = [dict(h) for h in (final.get("repair_history") or [])]
+    errors = list(final.get("previous_errors") or [])
+    status = final.get("repair_status") or repair_mod.STATUS_NOT_NEEDED
+    last_error = errors[-1] if errors else {}
+    durations = [h.get("duration_ms", 0) for h in history
+                 if h.get("duration_ms") is not None]
+
+    if passed:
+        outcome = "success"
+    elif status in (repair_mod.STATUS_EXHAUSTED, repair_mod.STATUS_REPEATED):
+        outcome = "exhausted"
+    else:
+        outcome = "fallback"   # 环境不可用等不可修复情形 → 结构化失败收尾
+
+    policy_name = final.get("repair_policy") or getattr(config, "REPAIR_POLICY", "v2")
+    return {
+        "policy": policy_name,
+        "first_pass_success": bool(passed and attempts <= 1),
+        "outcome": outcome,
+        "repair_status": status,
+        "repair_attempts": len(history),
+        "max_fix_attempts": config.MAX_FIX_ATTEMPTS,
+        "executions": attempts,
+        "error_category": last_error.get("category", ""),
+        "error_label": last_error.get("label", ""),
+        "error_signature": last_error.get("signature", ""),
+        "repair_strategy": history[-1].get("strategy", "") if history else "",
+        "repair_reason": final.get("repair_reason", ""),
+        "repeated_error": bool(final.get("repair_repeat_kind")),
+        "repeat_kind": final.get("repair_repeat_kind", ""),
+        "error_chain": [e.get("label") or e.get("category", "") for e in errors],
+        "errors": repair_mod.summarize_errors(errors),
+        "attempts": [
+            {"attempt": h.get("attempt"), "trigger_category": h.get("trigger_category"),
+             "trigger_signature": h.get("trigger_signature"),
+             "strategy": h.get("strategy"), "focus": h.get("focus"),
+             "duration_ms": h.get("duration_ms"), "ok": h.get("ok"),
+             "result_category": h.get("result_category")}
+            for h in history
+        ],
+        "repair_latency_ms": _latency_stats(durations),
+        "llm": {
+            "calls": (llm or {}).get("calls", 0),
+            "input_tokens": (llm or {}).get("input_tokens", 0),
+            "output_tokens": (llm or {}).get("output_tokens", 0),
+            "cost_usd": (llm or {}).get("cost_usd", 0.0),
+        },
+    }
+
+
+def _latency_stats(samples: list[int]) -> dict:
+    """修复耗时统计（毫秒）：p50 / p95 / 总和，用于回答"自修复的延迟代价"。"""
+    if not samples:
+        return {"count": 0, "p50_ms": 0, "p95_ms": 0, "max_ms": 0, "total_ms": 0}
+
+    ordered = sorted(samples)
+
+    def q(ratio: float) -> int:
+        idx = min(int(ratio * (len(ordered) - 1) + 0.5), len(ordered) - 1)
+        return ordered[idx]
+
+    return {"count": len(ordered), "p50_ms": q(0.50), "p95_ms": q(0.95),
+            "max_ms": ordered[-1], "total_ms": sum(ordered)}
+
 
 
 def _llm_stats(run_pk: int) -> dict:

@@ -275,6 +275,35 @@ export interface RunTrace {
   };
   skill: { matched_ids: number[]; hit: boolean; mode: string };
   execution: { ok: boolean; attempts: number; repair_count: number; sandboxed: boolean };
+  /** Self-Repair V2 观测段：为什么修 / 修了几次 / 每轮耗时 / 最终如何收场 */
+  self_repair?: {
+    policy: string;
+    first_pass_success: boolean;
+    outcome: string;
+    repair_status: string;
+    repair_attempts: number;
+    max_fix_attempts: number;
+    executions: number;
+    error_category: string;
+    error_label?: string;
+    error_signature?: string;
+    repair_strategy?: string;
+    repair_reason?: string;
+    repeated_error?: boolean;
+    repeat_kind?: string;
+    error_chain?: string[];
+    attempts?: {
+      attempt?: number;
+      trigger_category?: string;
+      strategy?: string;
+      focus?: string;
+      duration_ms?: number;
+      ok?: boolean;
+      result_category?: string;
+    }[];
+    repair_latency_ms?: { count: number; p50_ms: number; p95_ms: number; max_ms: number; total_ms: number };
+  };
+
   llm: {
     calls: number;
     input_tokens: number;

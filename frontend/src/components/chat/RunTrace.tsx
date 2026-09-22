@@ -28,6 +28,14 @@ const SKILL_TAG: Record<string, { color: string; text: string }> = {
   fresh: { color: 'default', text: '全新生成' },
 };
 
+/** 自修复结局（后端 self_repair.outcome） */
+const REPAIR_OUTCOME: Record<string, { color: string; text: string }> = {
+  success: { color: 'success', text: '成功' },
+  exhausted: { color: 'error', text: '修复耗尽' },
+  fallback: { color: 'warning', text: '兜底失败' },
+  runtime_error: { color: 'error', text: '链路异常' },
+};
+
 function StatItem({ label, value }: { label: string; value: React.ReactNode }) {
   return (
     <div style={{ minWidth: 96 }}>
@@ -41,6 +49,8 @@ function TraceBody({ trace }: { trace: RunTrace }) {
   const validation = VALIDATION_TAG[trace.validation?.status] || VALIDATION_TAG.warn;
   const skill = SKILL_TAG[trace.skill?.mode] || SKILL_TAG.fresh;
   const totalTokens = (trace.llm?.input_tokens || 0) + (trace.llm?.output_tokens || 0);
+  const repair = trace.self_repair;
+  const repairOutcome = REPAIR_OUTCOME[repair?.outcome || ''] ;
 
   return (
     <div>
@@ -57,6 +67,43 @@ function TraceBody({ trace }: { trace: RunTrace }) {
           value={<Tag color={validation.color} style={{ margin: 0 }}>{validation.text}</Tag>}
         />
       </div>
+
+      {/* Self-Repair V2：为什么修 / 修了几次 / 每轮耗时 / 怎么收场 */}
+      {repair && repair.policy !== 'not_applicable' && !repair.first_pass_success && (
+        <div style={{
+          border: '1px solid #e2e8f0', borderRadius: 8, padding: '8px 10px',
+          marginBottom: 12, background: '#f8fafc',
+        }}>
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, alignItems: 'center' }}>
+            {repairOutcome && <Tag color={repairOutcome.color} style={{ margin: 0 }}>{repairOutcome.text}</Tag>}
+            <Tag style={{ margin: 0 }}>{repair.error_label || repair.error_category || '未分类'}</Tag>
+            {repair.repair_strategy && <Tag color="geekblue" style={{ margin: 0 }}>策略 {repair.repair_strategy}</Tag>}
+            {repair.repeated_error && <Tag color="volcano" style={{ margin: 0 }}>复读提前终止</Tag>}
+            <Tag style={{ margin: 0 }}>
+              修复 {repair.repair_attempts}/{repair.max_fix_attempts} 次
+            </Tag>
+            {(repair.repair_latency_ms?.total_ms ?? 0) > 0 && (
+              <Tag style={{ margin: 0 }}>修复耗时 {fmtMs(repair.repair_latency_ms?.total_ms)}</Tag>
+            )}
+          </div>
+          {(repair.attempts || []).length > 0 && (
+            <div style={{ marginTop: 6 }}>
+              {(repair.attempts || []).map((a, i) => (
+                <div key={i} style={{ fontSize: 12, color: '#64748b', display: 'flex', gap: 8 }}>
+                  <span>#{a.attempt ?? i + 1}</span>
+                  <span>{a.trigger_category}</span>
+                  <span>→ {a.strategy}</span>
+                  <span>{fmtMs(a.duration_ms)}</span>
+                  <span>{a.ok ? '已修复' : `仍为 ${a.result_category || '失败'}`}</span>
+                </div>
+              ))}
+            </div>
+          )}
+          {repair.repair_reason && (
+            <div style={{ fontSize: 12, color: '#94a3b8', marginTop: 4 }}>{repair.repair_reason}</div>
+          )}
+        </div>
+      )}
 
       {/* Skill 命中模式 */}
       {trace.skill?.hit && (

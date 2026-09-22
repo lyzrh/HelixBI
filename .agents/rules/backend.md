@@ -5,7 +5,9 @@
 - `backend/routers/`：**API 层**，一个业务域一个文件（auth/analysis/sessions/datasources/agents/skills/insights/dashboards/explore/settings/usage/misc）。router 只做参数校验、权限门、调用领域模块、组装响应，**不写业务逻辑、不直接操作 ORM 细节**。
 - **领域模块**（按能力划分，不按技术划分）：
   - `backend/auth/`：认证与 RBAC（`security.py` 口令哈希 + JWT、`context.py` UserContext 解析 + `permission_checker`、`deps.py` `get_current_context` / `require_permission`）。
-  - `backend/agent/`：Agent 内核与沙箱客户端（`graph.py` / `prompts.py` / `profiler.py` / `sandbox.py`）。
+  - `backend/agent/`：Agent 内核与沙箱客户端（`graph.py` / `prompts.py` / `profiler.py` / `sandbox.py`），
+    以及 Self-Repair V2 的 `repair.py`（错误分类 / 定向修复策略 / error signature / 有界重试，零 token）
+    与 `acceptance.py`（结果验收硬门槛，`analysis/validation.py` 在其上追加软检查）。
   - `backend/analysis/`：`runtime.py` 对话式分析运行器（SSE 流式 + 落库）；`explore.py` 自助分析（本地 pandas / 只读 SQL，零 token）。
   - `backend/skills/`：`engine.py` Skill 捕获 / 重放执行 / few-shot / 失败兜底；`retrieval.py` **检索与重放准入**（候选召回 → 8 路可解释打分 → blocker + 分层准入，零 token、纯确定性，权重在 `config.SKILL_RETRIEVAL_WEIGHTS`）。
   - `backend/insights/`：`engine.py` 规则扫描 + LLM 诊断，`scheduler.py` 定时任务。
@@ -30,6 +32,8 @@
 - SQLite 处于 WAL 模式，不要关闭；所有元数据访问走 SQLAlchemy，不要裸写 SQL 字符串拼接。
 - LLM 调用统一走 OpenAI 兼容接口（DeepSeek / 智谱 / 通义 / vLLM 均可），不要引入厂商私有 SDK。
 - Token 纪律：Skill 重放不经过 LLM；连接测试只发 `max_tokens=1` 探测；洞察诊断等批量任务注意控制上下文长度。
+  自修复 V2 同样**不新增 LLM 调用**——失败时只是把同一次生成调用的提示换成按错误类别定制的处方
+  （`agent/repair.py::STRATEGIES`），复读或额度用尽则直接停止重试。
 - 新增依赖先确认必要性，写入 `requirements.txt`；不要引入重量级框架替换现有 LangGraph 链路。
 - 新增 / 移动领域目录、改动认证与权限行为时，同一次提交里同步更新 `AGENTS.md` 架构地图、`.agents/rules/` 与 `docs/api.md`。
 
@@ -50,5 +54,10 @@ pytest -q
 
 改了 Skill 检索 / 重放准入后，还要跑 `python -m backend.evaluation --benchmark`：False Replay 必须仍为 0，
 Replay Precision 不得低于基线（`tests/evaluation/test_retrieval_gate.py` 会拦住回归）。
+
+改了错误分类 / 修复策略 / 重试额度 / 结果验收门后，跑 `python -m backend.evaluation --repair-benchmark`
+（离线策略仿真，`measured=false`）与 `pytest tests/test_self_repair_loop.py tests/test_repair_strategy.py -q`；
+`tests/evaluation/test_self_repair_eval.py` 会拦住成功率回退、上限被放大、场景期望不一致等回归。
+有 Docker + LLM 时另跑 `--repair-benchmark --repair-live` 采集真实指标（缺资源时如实 skipped）。
 新增准入约束时同时补一条对抗样例到 `backend/evaluation/datasets/admission/`，
 否则这类误重放没有回归保护。

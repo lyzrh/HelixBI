@@ -88,7 +88,7 @@ curl -X POST http://127.0.0.1:8000/api/auth/switch-workspace \
 | POST | `/api/sessions/{sid}/analyze` | `analysis:execute` | **SSE** 流式分析（Skill 匹配 → 图谱执行 → 落库） |
 | POST | `/api/sessions/{sid}/parse` | `analysis:execute` | 仅跑意图解析，返回 QuerySpec 供人工确认 |
 | GET | `/api/runs/recent` | 登录 | 最近分析运行（按工作区过滤） |
-| GET | `/api/runs/{rid}` | 登录 | 运行详情（含 `trace`；跨工作区 404） |
+| GET | `/api/runs/{rid}` | 登录 | 运行详情（含 `trace`：`stages` / `semantic` / `skill.retrieval` / `self_repair` / `llm` / `validation`；跨工作区 404） |
 | GET | `/api/runs/{rid}/export` | 登录 | 导出单轮分析 HTML 报告 |
 | POST | `/api/runs/{rid}/rerun` | `analysis:execute` | 用存量 spec 重跑（**SSE**，同样受工作区隔离约束） |
 
@@ -98,10 +98,10 @@ curl -X POST http://127.0.0.1:8000/api/auth/switch-workspace \
 
 | event | data | 时机 |
 | --- | --- | --- |
-| `step` | `{node, label, status: running\|done\|error, detail, attempt?}` | 每节点开始 / 结束（node 含后端附加的 `materialize` / `skill`） |
+| `step` | `{node, label, status: running\|done\|error, detail, attempt?}` | 每节点开始 / 结束（node 含图谱的 `classify`，以及后端附加的 `materialize` / `skill`；`classify` 的 label 会写明「识别为『列不存在』→ 定向修复（schema_alignment）」，终止重试时 `detail` 给出决策原因） |
 | `spec` | `{spec}` | 意图解析完成 |
 | `code` | `{plan, code, attempt}` | 每次生成代码（自修复会多次） |
-| `execute` | `{ok, stdout, stderr, run_dir, charts, tables, text}` | 每次沙箱执行 |
+| `execute` | `{ok, stdout, stderr, run_dir, charts, tables, text}` | 每次沙箱执行（自修复会多次；失败原因与修复决策见 `Run.trace.self_repair`） |
 | `answer` | `{answer}` | 结论生成完成 |
 | `followups` | `{followups}` | 追问推荐完成 |
 | `charts` / `tables` | 产物相对 URL / 表格数据 | 最终成功后 |

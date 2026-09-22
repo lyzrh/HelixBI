@@ -26,6 +26,7 @@
   → 连接数据（文件 / 数据库，归属工作区）
   → 对话提问（可选口径确认）
   → SSE 流式分析（Skill 检索命中 → 秒级重放、零 token；不命中 / 重放失败 → LLM 生成 + 失败自修复）
+      · 自修复 V2：错误分类 → 定向修复 → 有界重试 → 兜底（复读提前终止，失败也留可解释 trace）
   → 结论 + 图表 + 表格 + 追问
   → 沉淀为 Skill / 固定到仪表板
   → 定时洞察扫描 → LLM 经营诊断 → 仪表板 → 导出报告
@@ -56,7 +57,7 @@
 | 模块 | 能力 |
 | --- | --- |
 | **认证与权限** | 用户名 / 邮箱 + 口令登录（JWT）+ 自助注册（不授予角色）；用户 → 工作区成员 → 角色 → 权限四层解析出 UserContext，「同一个人在不同工作区可以是不同角色」；11 个权限点覆盖数据源 / SQL / 分析 / 仪表板 / Skill / 成员管理；admin 可视化添加 / 改角色 / 移除成员（末位管理员保护）；权限一律后端判定，绕过前端直调同样被拒 |
-| **对话分析** | 自然语言提问，SSE 流式展示步骤进度 / 代码 / 终端 / 图表 / 表格 / 结论；「先确认查询」模式可人工编辑 QuerySpec 再执行；失败自动修复重试（最多 3 次）；推荐追问一键续问 |
+| **对话分析** | 自然语言提问，SSE 流式展示步骤进度 / 代码 / 终端 / 图表 / 表格 / 结论；「先确认查询」模式可人工编辑 QuerySpec 再执行；**失败自修复 V2**：错误分类（语法 / 列名 / 类型 / 空结果 / 超时 / OOM / 回传契约 / 未知 / 环境）→ 按类别注入定向修复提示 → 有界重试（全局 3 次 + 每类额度 + 复读提前终止）→ 兜底给出结构化失败；推荐追问一键续问 |
 | **自助分析** | 点击 / 拖拽字段即时出图（ECharts 交互渲染，本地计算零 token）；柱 / 线 / 饼 / 面 / 散点 / 堆叠等图表类型随时切换；聚合方式与排序可调 |
 | **场景 Agent** | 预置零售销售 / 生产制造行业专家：绑定语义包与数据源、开场白、推荐问题、启停管理，开箱即聊 |
 | **Skill 库** | 验证过的分析路径自动沉淀为可复用 Skill；**检索 V2**：8 路可解释信号打分 + 重放准入（指标 / 维度 / 分析类型 / 排序方向 / TopN / 时间窗 / 数据源指纹任一不符就不重放），命中即秒回、**零 LLM 调用**，不命中或重放失败自动回到完整 Agent；三级作用域 global / workspace / user 防串数据；使用 / 成功率统计 |
@@ -66,8 +67,8 @@
 | **语义层** | 行业语义包定义指标（含派生公式：良率、达成率、客单价等）、维度、同义词、时间口径、图表建议，注入生成 prompt 保证口径一致 |
 | **设置中心** | LLM 接口热更新（DeepSeek / 智谱 / 通义 / OpenAI 兼容接口，保存即生效）；偏好设置（回答风格 / 创意度 / 追问开关 / 自定义指令）；**界面语言中英切换**（导航 / 工作台 / 设置中心即时生效，本地持久化）；个人资料 |
 | **可靠性** | 沙箱无网络 + CPU / 内存限制 + 数据只读；`dahelper` JSON 契约回传；SQLite 元数据库 WAL 模式；认证与权限在 API 层、运行时、工具执行前三次收口 |
-| **评估体系** | 65 条固定问题集（零售 / 制造 / 口语化对抗样例）+ **20 条对抗准入样例**（同指标不同维度 / 排序方向相反 / 时间窗变化 / 数据源变化 / 相似 Skill 竞争…）+ 分阶段指标报告（语义解析 / 口径注入 / Skill 检索 / 重放准入 / 效率）；基线可复现（V1 策略冻结留档），指标作为 CI 门禁进 pytest 与 CI |
-| **可观测性** | 每轮分析落 `Run.trace`：分阶段耗时、LLM 调用与 token、**Skill 检索档案（候选 8 路分数 / 选中项 / 准入结论 / 拒绝与 fallback 原因）**、六项结果验收、**触发者用户 / 工作区 / 角色**；前端「运行时间线」面板可展开查看——Skill 重放的 `LLM calls == 0` 是数据不是文案 |
+| **评估体系** | 65 条固定问题集（零售 / 制造 / 口语化对抗样例）+ **20 条对抗准入样例**（同指标不同维度 / 排序方向相反 / 时间窗变化 / 数据源变化 / 相似 Skill 竞争…）+ **12 条自修复失败场景**（语法 / 列名 / 类型 / 空结果 / 超时 / OOM / 复读 / 多错 / 额度耗尽 / 验收不过 / 环境不可用 / 重放不进自修复）+ 分阶段指标报告（语义解析 / 口径注入 / Skill 检索 / 重放准入 / 自修复 / 效率）；基线可复现（V1 策略冻结留档），指标作为 CI 门禁进 pytest 与 CI |
+| **可观测性** | 每轮分析落 `Run.trace`：分阶段耗时、LLM 调用与 token、**Skill 检索档案（候选 8 路分数 / 选中项 / 准入结论 / 拒绝与 fallback 原因）**、**自修复档案（首次成功 / 修复次数 / 每轮错误类别与策略 / 每轮耗时 / 最终 success|exhausted|fallback）**、六项结果验收、**触发者用户 / 工作区 / 角色**；前端「运行时间线」面板可展开查看——Skill 重放的 `LLM calls == 0` 是数据不是文案 |
 
 ## 认证与权限（RBAC）
 
@@ -154,6 +155,14 @@ Skill Retrieval V2（完整路径签名口径：包 / 指标 / 维度 / 类型 /
   False Replay Rate          0.0%    (基线 4.6%，3 条 → 0 条)
   准入判定正确率（对抗集）     100.0%  (20 条；基线 50.0%，误放行 10 → 0)
   LLM 调用 / 查询            0.09    (计入误重放后 0.09；基线 0.14)
+Self-Repair V2（离线策略仿真：桩化 LLM/沙箱，驱动真实图谱；非实测）
+  首次执行成功率              8.3%    (1/12)         基线 8.3%
+  修复成功率                 80.0%   (8/10 条需修复) 基线 18.2%
+  总成功率                   75.0%                    基线 25.0%
+  平均修复次数                1.17                     基线 2.67
+  复读检测率 / 修复耗尽率      8.3% / 16.7%             基线 0.0% / 75.0%
+  LLM 调用 / Token / 查询     5.00 / 2785              基线 6.08 / 4218
+  Skill 重放不进自修复         2/2 断言通过              重放成功 = 0 修复 / 0 LLM
 代码执行 / 自修复 / 端到端    需 Docker 沙箱，资源缺失时如实标注「未采集」
 ```
 
@@ -161,6 +170,8 @@ Skill Retrieval V2（完整路径签名口径：包 / 指标 / 维度 / 类型 /
 口语化对抗样例（60%）暴露了语义包同义词缺口（如「地区」）与排名词缺口（如「最长」），
 修复后标准表述达 100%；Skill 匹配引入语义解析骨架后 Top1 从 64.6% 提升到 72.3%；
 Skill Retrieval V2 在此基础上把 Top1 提到 78.5%，并用**重放准入**把错误重放从 4.6% 降到 0。
+自修复 V2 把修复成功率从 18.2% 提到 80.0%、总成功率从 25.0% 提到 75.0%，同时把 LLM 调用
+降 17.8%、Token 降 34.0%（离线策略仿真口径；真实执行指标在 Docker 可用前标注「未采集」）。
 指标阈值同时作为 pytest 门禁（`tests/evaluation/`），并进 CI（见下）。
 
 ### Skill Retrieval V2 / Replay Admission
@@ -186,6 +197,37 @@ Query → Semantic Resolution → Candidate Retrieval → Top-K 打分（8 路�
 [`docs/skill-retrieval-v2.md`](docs/skill-retrieval-v2.md)；一键复现
 `python -m backend.evaluation --benchmark`。
 
+### Agent Self-Repair V2（错误分类 → 定向修复 → 有界重试 → 兜底）
+
+改造前的自修复只有一条路径：失败 → 把同一段提示（`FIX_USER_TMPL`）连同 stderr 塞回 LLM →
+重新生成 → 再执行，最多 `MAX_FIX_ATTEMPTS` 次。三个缺口：**提示词与病因无关**（列名错、
+dtype 错、超时、空结果拿到的是一样的劝告）、**不识别复读**（同一个 traceback 还会再烧一次
+token）、**不可解释**（只有 `attempts=3`，说不出为什么）。
+
+V2 在 `execute` 之后插入一个确定性（零 token）的 `classify` 节点：
+
+```
+execute → classify（错误分类 + 结果验收门）
+            ├─ 通过验收 ──────────────────────────→ summarize
+            ├─ 可修复且有额度 → 定向修复提示 ──────→ generate_code（回到顶部）
+            └─ 复读 / 额度用尽 / 不可修复 ─────────→ summarize（结构化失败，不抛异常）
+```
+
+- **错误分类**：语法 / 名称 / 列不存在 / 类型取值 / 结果为空 / 超时 / 资源超限 / 回传契约 /
+  未知 / 环境不可用，优先用结构化事实（`exit_code` / `timed_out` / `failure_kind`）而不是猜文案；
+- **定向修复**：每类错误一份针对性处方（列名 → 对齐真实 schema 与语义层字段；类型 → 修正
+  dtype 与转换链路；空结果 → 核对过滤条件 / 时间范围 / 字段取值；语法 → 只修代码结构；
+  超时 / OOM → 降计算量与内存），并携带「前几轮错在哪」的历史，**仍是同一次 LLM 调用**；
+- **有界重试**：错误指纹（`类别|归一化正文`）相同即判定复读并立即停止；连续同类错误视为
+  无进展提前终止；每类错误另有独立额度；全局上限仍是 `MAX_FIX_ATTEMPTS`（最多执行 4 次）；
+- **验收门统一**：`execution_ok + has_artifact` 由 `backend/agent/acceptance.py` 单点实现，
+  Self-Repair 与 `validate_final` 共用同一把尺子；顺带修正「空结果表算成功」的老问题。
+
+工程故事（Problem → Baseline → Optimization → Benchmark → Result）、错误分类表、重试与停止
+策略、trace 示例与遗留问题：[`docs/self-repair-v2.md`](docs/self-repair-v2.md)；一键复现
+`python -m backend.evaluation --repair-benchmark`（有 Docker + LLM 时加 `--repair-live`
+采集真实指标）。
+
 ## 可观测性
 
 每轮分析（含 Skill 重放）都落一条 `Run.trace`：
@@ -194,6 +236,9 @@ Query → Semantic Resolution → Candidate Retrieval → Top-K 打分（8 路�
 - **LLM 用量**：调用次数（按节点分布）、输入 / 输出 token、成本——Skill 重放轮为 0
 - **Skill 检索档案**：候选 Skill 及各自 8 路分数、选中项、准入结论与拒绝原因、
   重放还是 fallback 到 Agent——「为什么没重放」「为什么选中它」都能从 trace 直接回答
+- **自修复档案**：`self_repair` 段记录首次是否成功、修复几次、每轮的错误类别 / 指纹 / 采用的
+  策略 / 耗时，以及最终 `success | exhausted | fallback`——「为什么这个 Agent 修了 2 次才成功」
+  「为什么第 2 次就放弃」都能直接从 trace 回答；Skill 重放轮标注 `not_applicable`
 - **结果验收**：执行成功 / 有产物 / 结论非空 / 图表文件真实存在 / 表格结构完整 / stderr 干净，六项检查与 `ok` 状态解耦
 - **触发者**：本轮的用户 / 工作区 / 角色，便于按人按工作区审计
 - **失败留痕**：失败的运行同样写 trace，排查问题时那一轮才是最需要看的
@@ -228,7 +273,9 @@ Query → Semantic Resolution → Candidate Retrieval → Top-K 打分（8 路�
 │              agents skills insights dashboards explore(SQL)    │
 │              settings usage misc（含权限门与登录门）             │
 │  auth/       认证与 RBAC：UserContext 解析 + 权限判断单一入口     │
-│  agent/      Agent 内核：graph（LangGraph 图谱）+ sandbox 客户端 │
+│  agent/      Agent 内核：graph（LangGraph 图谱）+ repair（错误   │
+│              分类/定向修复/有界重试）+ acceptance（验收门）        │
+│              + sandbox 客户端                                     │
 │  analysis/   Analysis Runtime（驱动 + 落库）+ 自助分析（零 token）│
 │  skills/     Skill 沉淀 / 匹配 / 重放 / few-shot                │
 │  insights/   规则扫描 + 定时调度 + LLM 诊断                      │
@@ -239,8 +286,8 @@ Query → Semantic Resolution → Candidate Retrieval → Top-K 打分（8 路�
 │        运行/数据源/Agent/Skill/洞察/仪表板/系统设置/Token 用量    │
 └───────────────────────────┬───────────────────────────────────┘
                             ▼
-             LangGraph 内核（parse_intent → generate_code
-               → execute → 自修复循环 → summarize → followup）
+             LangGraph 内核（parse_intent → generate_code → execute
+               → classify（分类+验收门）→ 定向修复循环 → summarize → followup）
                             ▼
          Docker 沙箱：--network none、CPU/内存限制、/data 只读
          文件型数据源直接挂载；数据库数据先物化为 parquet 再进沙箱
@@ -340,13 +387,17 @@ backend/                # FastAPI 服务（按业务领域组织）
   auth/                 # 认证与 RBAC：security（口令+JWT） context（UserContext
                         #   + permission_checker） deps（登录门 / 权限门）
   agent/                # Agent 内核：graph prompts profiler sandbox
+                        #   + repair（错误分类 / 定向修复 / 有界重试）
+                        #   + acceptance（结果验收硬门槛，validation 与 Self-Repair 共用）
   analysis/             # Analysis Runtime（runtime）+ 自助分析（explore）
   skills/               # Skill 沉淀 / 检索（retrieval：打分+准入）/ 重放（含作用域隔离）
   insights/             # 规则扫描（engine）+ 定时调度（scheduler）
   datasource/           # 文件 / DB 接入 + parquet 物化
   semantic/             # 语义包运行时（registry 加载 + render 渲染 + resolver 确定性解析）
   evaluation/           # 评估流水线：数据集 / 指标 / 运行器 / 检索基准 / 效率模型
-                        #   （python -m backend.evaluation [--benchmark|--tune-weights]）
+                        #   + 自修复基准（repair_cases 场景 + repair_bench 离线策略仿真）
+                        #   （python -m backend.evaluation
+                        #     [--benchmark|--repair-benchmark|--tune-weights]）
   report/               # 报告导出（builder 单轮 / exporter 仪表板）
 semantic_packs/         # 行业语义包（retail_sales / manufacturing_production yaml）
 sandbox/                # 独立执行环境：沙箱镜像（pandas/pyarrow/matplotlib/
@@ -357,7 +408,8 @@ frontend/               # React + AntD + Zustand + Vite
   src/stores/           # chatStore（SSE 状态机） authStore（认证态） appStore
   src/api/              # client（注入 token / 401 跳转） sse（流式读取）
 tests/                  # pytest 套件（evaluation/ 指标门禁 + test_auth_rbac.py 权限用例）
-docs/                   # api.md（接口清单） + README 图片
+docs/                   # api.md（接口清单） + skill-retrieval-v2.md
+                        #   + self-repair-v2.md（自修复工程故事与基准）+ README 图片
 examples/               # 示例数据（零售 / 生产 CSV，演示用生成数据）
 screenshots/            # README 截图
 AGENTS.md               # AI 编程助手通用规则（AGENTS 标准）
@@ -419,7 +471,7 @@ curl http://127.0.0.1:8000/api/datasources \
 ## Roadmap
 
 - **R2**：仪表板图表前端化（ECharts 交互渲染替代 PNG）、洞察订阅推送、其余页面文案国际化（当前中英切换已覆盖导航 / 工作台 / 设置中心，登录页与工作区选择器仍为中文）；~~多用户与权限~~（✅ 已落地：登录 / 工作区 / UserContext / RBAC，见「认证与权限」）
-- **R3**：~~评估集回归~~（✅ 已落地：`backend/evaluation/` + `tests/evaluation/` 门禁；下一步扩充问题集并采集沙箱执行 / 自修复指标）、语义包可视化编辑器、指标血缘
+- **R3**：~~评估集回归~~（✅ 已落地：`backend/evaluation/` + `tests/evaluation/` 门禁；下一步扩充问题集并采集沙箱执行指标）、语义包可视化编辑器、指标血缘
 - **安全加固（P1）**：静态产物目录鉴权（`/runs`、`/uploads`、`/data` 目前可直接访问）、数据库密码加密存储、刷新令牌与注销黑名单、按权限点细分 Agent / 设置类接口
 - **架构演进（P2）**：`backend/routers/` → `api/`、`config/db/models/schemas` 收敛到 `core/`；前端引入 `features/` 分域（详见 [.agents/rules/architecture.md](.agents/rules/architecture.md)）
 

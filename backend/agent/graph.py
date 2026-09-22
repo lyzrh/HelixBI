@@ -1,13 +1,19 @@
-"""LangGraph agent core: plan -> generate code -> sandbox execute -> self-fix loop.
+"""LangGraph agent core: plan -> generate code -> sandbox execute -> classify -> self-repair.
 
-The self-repair loop (execute-error -> regenerate, up to MAX_FIX_ATTEMPTS) is
-the reliability core identified in the research (OpenCodeInterpreter /
-PandasAI lessons).
+自修复的可靠性核心（OpenCodeInterpreter / PandasAI 的经验）在本项目里经历了两个版本：
+
+- **V1**：execute → 失败就用同一段 prompt 重新生成，最多 `MAX_FIX_ATTEMPTS` 次；
+- **V2（当前）**：execute → `classify`（错误分类 + 验收门）→ `decide`（定向策略 +
+  有界额度 + 复读检测）→ 需要时注入**针对性修复提示**重新生成 → execute …
+  → 通过验收则 summarize，否则以结构化失败收尾。
+
+分类与决策全部确定性、零 token（不新增 LLM 调用），实现见 `backend/agent/repair.py`。
 """
 
 import json
 import logging
 import re
+import time
 import uuid
 from typing import Any, TypedDict
 
@@ -19,6 +25,8 @@ from backend import config
 from backend.config import MAX_FIX_ATTEMPTS
 
 from . import prompts
+from . import repair as repair_mod
+from .acceptance import acceptance_gate
 from .profiler import profile_all
 from .sandbox import SandboxResult, run_in_sandbox
 
@@ -160,6 +168,19 @@ class AgentState(TypedDict):
     # RBAC 最小钩子（与 skill_block 同模式）：可信后端解析的 UserContext。
     # LLM 不可决定或修改权限；execute 节点执行前做工具级权限校验（纵深防御）。
     user_context: dict
+    # ---- Self-Repair V2 state（新增字段，不动 Skill Replay / QuerySpec / 语义解析 / 验收）----
+    repair_policy: str          # "v2"（默认，分类+定向修复）| "v1"（冻结基线，仅供评估对比）
+    repair_attempt: int         # 已发起的修复次数（首次执行不算）
+    repair_status: str          # not_needed / repairing / succeeded / exhausted / repeated_failure / not_repairable
+    error_category: str         # 最近一次执行的错误类别（见 repair.CATEGORIES）
+    error_signature: str        # 最近一次执行的错误指纹（类别 + 归一化正文）
+    repair_strategy: str        # 最近一次修复采用的策略 id
+    repair_hint: str            # 注入给 LLM 的定向修复提示（trace 可回溯"当时说了什么"）
+    repair_reason: str          # 决策原因（人类可读，回答"为什么修 / 为什么停"）
+    repair_repeat_kind: str     # "" | identical | equivalent（复读类型）
+    previous_errors: list[dict]  # 历史失败序列（类别 / 指纹 / 触发它的策略）
+    repair_history: list[dict]   # 每次修复的耗时与结果（观测"修了多久、修完变成什么错"）
+
 
 
 def _history_block(history: list[dict[str, str]] | None) -> str:
@@ -233,6 +254,31 @@ def parse_intent(state: AgentState) -> dict:
         return {"spec": {"rewritten_question": state["question"]}}
 
 
+def _repair_policy(state: AgentState) -> repair_mod.RepairPolicy:
+    """把配置（或本次运行的显式指定）解析成重试策略。
+
+    `repair_policy="v1"` 是**冻结的 Baseline**：不分类、不复读检测，失败就无差别重试。
+    它只为评估对比存在（与 `skills/retrieval.py` 的 `legacy_*` 同一模式），线上默认 v2。
+    """
+    name = (state.get("repair_policy") or getattr(config, "REPAIR_POLICY", "v2") or "v2").lower()
+    return repair_mod.RepairPolicy(
+        name="v1" if name == "v1" else "v2",
+        max_fix_attempts=MAX_FIX_ATTEMPTS,
+        repeat_limit=int(getattr(config, "REPAIR_REPEAT_LIMIT", 1)),
+    )
+
+
+def _repair_hint(state: AgentState) -> str:
+    """本次修复要注入的处方：V2 按错误类别定制，V1 用冻结的统一提示。"""
+    hint = (state.get("repair_hint") or "").strip()
+    if hint:
+        return hint
+    if _repair_policy(state).is_legacy:
+        return repair_mod.LEGACY_UNIFORM_HINT
+    category = state.get("error_category") or repair_mod.CATEGORY_UNKNOWN
+    return repair_mod.strategy_for(category).hint
+
+
 def generate_code(state: AgentState) -> dict:
     files = state["files"]
     from backend.semantic import render_spec_prompt
@@ -255,11 +301,13 @@ def generate_code(state: AgentState) -> dict:
         execution = state["execution"]
         messages.append(
             HumanMessage(
-                content=prompts.FIX_USER_TMPL.format(
+                content=prompts.repair_user_prompt(
                     code=state["code"],
                     stdout=execution.get("stdout", ""),
                     stderr=execution.get("stderr", ""),
                     files_block=prompts.file_list_block(list(files)),
+                    repair_hint=_repair_hint(state),
+                    previous_errors=state.get("previous_errors") or [],
                 )
             )
         )
@@ -290,17 +338,132 @@ def execute(state: AgentState) -> dict:
         "tables": result.tables,
         "charts": result.charts,
         "run_dir": str(result.out_dir),
+        # 结构化失败信息：分类器优先读这些字段，而不是去猜 stderr 文案
+        "exit_code": result.exit_code,
+        "timed_out": result.timed_out,
+        "failure_kind": result.failure_kind,
     }
     return {"execution": execution, "attempts": state["attempts"] + 1}
 
 
-def route_after_execute(state: AgentState) -> str:
-    execution = state["execution"]
-    if execution["ok"] and (execution["text"] or execution["tables"] or execution["charts"]):
-        return "summarize"
-    if state["attempts"] <= MAX_FIX_ATTEMPTS:
+def _close_open_repair(history: list[dict], execution: dict, info,
+                       accepted: bool) -> list[dict]:
+    """给上一轮修复补上"修完花了多久、结果变成了什么错"。
+
+    修复耗时的口径是「上一次修复决策 → 本次执行结论」的墙钟间隔，即"一轮修复"的
+    真实代价（含 LLM 重新生成 + 沙箱执行），而不是某单个节点的耗时。
+    """
+    if not history:
+        return history
+    last = dict(history[-1])
+    if "duration_ms" in last:
+        return history
+    started = last.pop("started_at", None)
+    last["duration_ms"] = int((time.monotonic() - started) * 1000) if started else 0
+    last["result_category"] = info.category
+    last["result_signature"] = info.signature
+    last["ok"] = bool(accepted)
+    last["timed_out"] = bool(execution.get("timed_out"))
+    return [*history[:-1], last]
+
+
+def classify(state: AgentState) -> dict:
+    """执行态 → 错误分类 → 有界重试决策（确定性、零 token）。
+
+    这是 Self-Repair V2 的分水岭：V1 把"要不要重试"塞在路由函数里、只看 `ok`；
+    V2 把它拆成独立节点并落进 state，于是 `Run.trace` 能回答
+    「这次为什么修 2 次」「第 2 次为什么直接放弃」「第一轮错在哪」。
+    """
+    execution = state.get("execution") or {}
+    gate = acceptance_gate(execution)
+    info = repair_mod.classify_error(execution, gate)
+    policy = _repair_policy(state)
+    previous = list(state.get("previous_errors") or [])
+    history = _close_open_repair(list(state.get("repair_history") or []),
+                                execution, info, gate["passed"])
+    attempts = state.get("attempts", 0) or 0
+    decision = repair_mod.decide_repair(info, previous, policy, attempts=attempts)
+
+    update: dict[str, Any] = {
+        "error_category": info.category,
+        "error_signature": info.signature,
+        "repair_reason": decision.reason,
+        "repair_repeat_kind": decision.repeat_kind,
+        "repair_history": history,
+        "previous_errors": previous,
+        "repair_status": decision.status,
+        "repair_strategy": "",
+        "repair_hint": "",
+    }
+
+    if gate["passed"]:
+        # 首次即通过 = not_needed；修过之后才通过 = succeeded（可回答"首次成功率"）
+        # 通过验收时清空错误字段：没有失败就没有错误类别，别在 trace 里留噪声
+        update["repair_status"] = (repair_mod.STATUS_SUCCEEDED if attempts > 1
+                                   else repair_mod.STATUS_NOT_NEEDED)
+        update["repair_reason"] = ("修复后通过结果验收" if attempts > 1
+                                   else "首次执行即通过结果验收")
+        update["error_category"] = ""
+        update["error_signature"] = ""
+        return update
+
+    # 记录这一次失败：它是由"上一次的策略"产生的结果（首次失败时为全新生成）
+    update["previous_errors"] = [*previous, {
+        "category": info.category, "label": info.label, "signature": info.signature,
+        "message": info.message[:300], "exception": info.exception,
+        "strategy": state.get("repair_strategy") or "",
+        "attempt": attempts,
+    }]
+
+    if decision.action != "repair":
+        return update
+
+    strategy = decision.strategy or repair_mod.strategy_for(info.category)
+    update.update({
+        "repair_attempt": (state.get("repair_attempt") or 0) + 1,
+        "repair_strategy": strategy.strategy_id,
+        "repair_hint": strategy.hint,
+        "repair_history": [*history, {
+            "attempt": decision.attempt,
+            "category_attempt": decision.category_attempt,
+            "trigger_category": info.category,
+            "trigger_signature": info.signature,
+            "strategy": strategy.strategy_id,
+            "focus": strategy.focus,
+            "started_at": time.monotonic(),
+        }],
+    })
+    return update
+
+
+def route_after_classify(state: AgentState) -> str:
+    """通过验收 → 收尾；决策为"继续修" → 回到生成；其余（复读 / 耗尽 / 环境）
+    一律收尾——**结构化失败也好过无限重试**。"""
+    if state.get("repair_status") == repair_mod.STATUS_REPAIRING:
         return "generate_code"
     return "summarize"
+
+
+def _repair_block(state: AgentState) -> str:
+    """给 summarize 的自修复上下文：只在真的修过 / 失败时才注入（不给省 token 的轮次加料）。"""
+    attempts = state.get("attempts", 0) or 0
+    status = state.get("repair_status") or repair_mod.STATUS_NOT_NEEDED
+    if attempts <= 1 and status == repair_mod.STATUS_NOT_NEEDED:
+        return ""
+    category = state.get("error_category") or repair_mod.CATEGORY_UNKNOWN
+    label = repair_mod.CATEGORY_LABELS.get(category, category)
+    lines = [
+        "\n\n## 自修复过程（若最终失败，请如实说明修了几次、每轮错在哪，不要编造数字）",
+        f"- 代码执行 {attempts} 次，发起修复 {state.get('repair_attempt', 0)} 次"
+        f"（上限 MAX_FIX_ATTEMPTS={MAX_FIX_ATTEMPTS}）",
+        f"- 最终状态：{status}；最近错误类别：{label}（{category}）",
+        f"- 决策原因：{state.get('repair_reason') or '-'}",
+    ]
+    errors = state.get("previous_errors") or []
+    if errors:
+        chain = " → ".join(e.get("label") or e.get("category", "") for e in errors)
+        lines.append(f"- 错误序列：{chain}")
+    return "\n".join(lines)
 
 
 def summarize(state: AgentState) -> dict:
@@ -317,6 +480,7 @@ def summarize(state: AgentState) -> dict:
                 content=f"## 用户问题\n{state['question']}\n\n## 执行结果\n"
                 f"```json\n{result_json}\n```\n\n## stderr（若失败）\n"
                 f"{execution.get('stderr', '')[-1500:]}"
+                + _repair_block(state)
             ),
         ]
     )
@@ -359,12 +523,15 @@ def build_graph():
     graph.add_node("parse_intent", parse_intent)
     graph.add_node("generate_code", generate_code)
     graph.add_node("execute", execute)
+    graph.add_node("classify", classify)
     graph.add_node("summarize", summarize)
     graph.add_node("suggest_followups", suggest_followups)
     graph.set_entry_point("parse_intent")
     graph.add_edge("parse_intent", "generate_code")
     graph.add_edge("generate_code", "execute")
-    graph.add_conditional_edges("execute", route_after_execute)
+    # execute → classify：分类 + 验收门 + 有界重试决策（仍然是线性流程，无 tool-calling）
+    graph.add_edge("execute", "classify")
+    graph.add_conditional_edges("classify", route_after_classify)
     graph.add_edge("summarize", "suggest_followups")
     graph.add_edge("suggest_followups", END)
     return graph.compile()
@@ -374,6 +541,7 @@ NODE_LABELS = {
     "parse_intent": "理解问题（语义解析）",
     "generate_code": "生成分析代码",
     "execute": "沙箱执行",
+    "classify": "错误分类与修复决策",
     "summarize": "整理结论",
     "suggest_followups": "推荐追问",
 }
@@ -389,6 +557,7 @@ def _initial_state(
     run_id: int | None = None,
     session_id: int | None = None,
     user_context: dict | None = None,
+    repair_policy: str | None = None,
 ) -> AgentState:
     return {
         "question": question,
@@ -407,6 +576,18 @@ def _initial_state(
         "run_id": run_id,
         "session_id": session_id,
         "user_context": user_context or {},
+        # Self-Repair V2：全部为新增字段，默认值保证行为与「关掉自修复分类」的旧版一致
+        "repair_policy": repair_policy or getattr(config, "REPAIR_POLICY", "v2"),
+        "repair_attempt": 0,
+        "repair_status": repair_mod.STATUS_NOT_NEEDED,
+        "error_category": "",
+        "error_signature": "",
+        "repair_strategy": "",
+        "repair_hint": "",
+        "repair_reason": "",
+        "repair_repeat_kind": "",
+        "previous_errors": [],
+        "repair_history": [],
     }
 
 
@@ -420,11 +601,12 @@ def run_analysis(
     run_id: int | None = None,
     session_id: int | None = None,
     user_context: dict | None = None,
+    repair_policy: str | None = None,
 ) -> AgentState:
     app = build_graph()
     initial = _initial_state(question, files, history, spec, semantic_block, skill_block,
                              run_id=run_id, session_id=session_id,
-                             user_context=user_context)
+                             user_context=user_context, repair_policy=repair_policy)
     return app.invoke(initial)
 
 
@@ -438,13 +620,14 @@ def stream_analysis(
     run_id: int | None = None,
     session_id: int | None = None,
     user_context: dict | None = None,
+    repair_policy: str | None = None,
 ):
     """Run the graph yielding (node, delta, merged_state) after every node,
     so the UI can render DB-GPT-style live steps while the agent works."""
     app = build_graph()
     initial = _initial_state(question, files, history, spec, semantic_block, skill_block,
                              run_id=run_id, session_id=session_id,
-                             user_context=user_context)
+                             user_context=user_context, repair_policy=repair_policy)
     merged: dict = dict(initial)
     for update in app.stream(initial, stream_mode="updates"):
         for node, delta in update.items():
