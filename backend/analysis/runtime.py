@@ -14,6 +14,7 @@ from pathlib import Path
 
 from backend import config
 from backend.agent import budget as budget_mod
+from backend.agent import runerrors
 from backend.agent.acceptance import acceptance_gate
 from backend.agent.graph import NODE_LABELS, stream_analysis
 from backend.agent.sandbox import run_in_sandbox
@@ -47,6 +48,7 @@ def run_analysis_stream(
     skill_candidates: list | None = None,
     context_policy: str | None = None,
     budget_overrides: dict | None = None,
+    runtime_meta: dict | None = None,
 ) -> dict:
     """在工作线程中执行完整分析流，返回最终落库结果摘要。
 
@@ -56,10 +58,17 @@ def run_analysis_stream(
     retrieval：Skill 检索 + 重放准入结论（写进 trace.skill.retrieval，
     用于回答「为什么这次没重放、为什么落到 Agent」）。
     skill_candidates：路由阶段已经算好的 few-shot 候选（避免重复检索一遍）。
+    runtime_meta（Production Runtime V1）：`{"queue_wait_ms": float,
+    "cancel": threading.Event, "deadline_ts": float|None}` —— 由路由层的
+    并发槽位传入；取消 / 总时限在节点边界与每次 LLM / 沙箱调用前生效。
     """
     t0 = time.time()
     emit = on_event or (lambda *_: None)
     stages: list[dict] = []
+    runtime_meta = dict(runtime_meta or {})
+    runtime_meta.setdefault("t0", t0)
+    runtime_limits = {"cancel": runtime_meta.get("cancel"),
+                      "deadline_ts": runtime_meta.get("deadline_ts")}
     # 缓存增量统计：用来回答"这次省下来的确定性开销是不是真的"
     cache_before = cache_mod.snapshot()
     try:
@@ -79,15 +88,26 @@ def run_analysis_stream(
                                semantic_packs=(semantic_meta or {}).get("packs") or [],
                                skill_candidates=skill_candidates,
                                context_policy=context_policy,
-                               budget_overrides=budget_overrides)
+                               budget_overrides=budget_overrides,
+                               runtime_limits=runtime_limits)
+        emit("state", {"phase": "validating"})
         trace = _build_trace(run_pk, question, t0, stages, final, semantic_meta,
                              skill_block, skill_ids, user_context, retrieval,
-                             cache_diff=cache_mod.diff(cache_before))
+                             cache_diff=cache_mod.diff(cache_before),
+                             runtime_meta=runtime_meta)
         with SessionLocal() as db:
             summary = _persist_result(db, run_pk, session_id, question, data_source_ids,
                                       final, int((time.time() - t0) * 1000), trace)
+        emit("state", {"phase": "completed"})
         emit("done", summary)
         return summary
+    except (runerrors.RunCancelled, runerrors.RunDeadlineExceeded) as exc:
+        cancelled = isinstance(exc, runerrors.RunCancelled)
+        return _persist_aborted(
+            run_pk, session_id, question, data_source_ids, t0, stages, exc,
+            cache_before, runtime_meta, emit,
+            status="cancelled" if cancelled else "timeout",
+            state_phase="cancelled" if cancelled else "timeout")
     except Exception as exc:
         import traceback
         traceback.print_exc()
@@ -124,11 +144,57 @@ def run_analysis_stream(
                     "cost_control": build_cost_control_trace({}, _llm_stats(run_pk)),
                     "performance": build_performance_trace({}, stages,
                                                            cache_mod.diff(cache_before)),
+                    "runtime": build_runtime_trace(runtime_meta, {}, stages),
                     "error": str(exc)[:500],
                 })
                 db.commit()
+        emit("state", {"phase": "failed", "reason": str(exc)[:160]})
         emit("error", {"message": str(exc)})
         return {"run_id": run_pk, "ok": False, "message": str(exc)}
+
+
+# ---- 取消 / 超时的统一落库 ----
+
+def _persist_aborted(run_pk: int, session_id: int, question: str,
+                     data_source_ids: list[int], t0: float, stages: list[dict],
+                     exc: Exception, cache_before: dict, runtime_meta: dict,
+                     emit, status: str, state_phase: str) -> dict:
+    """取消 / 超时的统一落库与 SSE 收尾。
+
+    状态机要求"客户端断开不能让 run 永远停在 running"：取消与超时都在这里
+    落成终态（`Run.status = cancelled | timeout`），trace 带上 `runtime` 段，
+    SSE 收到明确的 `cancelled` / `timeout` 事件——前端不会一直 loading。
+    """
+    trace = {
+        "run_id": run_pk, "question": question, "model": config.MODEL_NAME,
+        "latency_ms": int((time.time() - t0) * 1000),
+        "stages": stages, "final_status": status,
+        "validation": {"status": "fail", "checks": [], "failed": [status]},
+        "self_repair": {"policy": config.REPAIR_POLICY, "outcome": status,
+                        "repair_status": "not_applicable", "repair_attempts": 0,
+                        "executions": 0, "first_pass_success": False,
+                        "error_category": status, "error_signature": "",
+                        "repair_strategy": "", "repair_reason": str(exc)[:300],
+                        "attempts": [], "repair_latency_ms": _latency_stats([]),
+                        "llm": _llm_stats(run_pk)},
+        "cost_control": build_cost_control_trace({}, _llm_stats(run_pk)),
+        "performance": build_performance_trace({}, stages, cache_mod.diff(cache_before)),
+        "runtime": build_runtime_trace(
+            runtime_meta, {}, stages, status=status, reason=str(exc)[:200],
+            timeout_type=getattr(exc, "timeout_type", "") or ""),
+        "error": str(exc)[:500],
+    }
+    with SessionLocal() as db:
+        run = db.get(Run, run_pk)
+        if run:
+            run.status = status
+            run.stderr = str(exc)[-4000:]
+            run.trace = jdump(trace)
+            db.commit()
+    emit("state", {"phase": state_phase,
+                   "reason": str(exc)[:160],
+                   "timeout_type": getattr(exc, "timeout_type", "") or ""})
+    return {"run_id": run_pk, "ok": False, "status": status, "message": str(exc)}
 
 
 # ---- 准备阶段：数据源 → 文件映射 + 语义块 ----
@@ -204,11 +270,13 @@ def _drive(run_pk, question, files, history, spec, semantic_block, skill_block, 
            semantic_packs: list[str] | None = None,
            skill_candidates: list | None = None,
            context_policy: str | None = None,
-           budget_overrides: dict | None = None) -> tuple[dict, list[dict]]:
+           budget_overrides: dict | None = None,
+           runtime_limits: dict | None = None) -> tuple[dict, list[dict]]:
     """驱动图谱并把每个节点的耗时记进 stages（供 trace 使用）。
 
     `stream_analysis` 每完成一个节点才 yield，因此"上一次 yield 到这一次 yield
-    的间隔"就是该节点的耗时。
+    的间隔"就是该节点的耗时。每个节点边界都检查取消 / 总时限——
+    客户端断开后最多再跑完当前节点就停，不会无限占用资源。
     """
     final: dict = {}
     stages: list[dict] = []
@@ -221,7 +289,9 @@ def _drive(run_pk, question, files, history, spec, semantic_block, skill_block, 
         run_id=run_pk, session_id=session_id, user_context=user_context,
         semantic_packs=semantic_packs, skill_candidates=skill_candidates,
         context_policy=context_policy, budget_overrides=budget_overrides,
+        runtime_limits=runtime_limits,
     ):
+        runerrors.check_runtime_limits(runtime_limits)
         now = time.time()
         stage = {
             "node": node,
@@ -288,6 +358,8 @@ def _emit_node_done(emit, node, delta, merged):
         if status == repair_mod.STATUS_REPAIRING:
             label = repair_mod.CATEGORY_LABELS.get(category, category)
             strategy = merged.get("repair_strategy", "")
+            emit("state", {"phase": "repairing", "error_category": category,
+                           "repair_strategy": strategy})
             emit("step", {"node": "classify",
                           "label": f"识别为「{label}」→ 定向修复（{strategy}）",
                           "status": "done"})
@@ -384,7 +456,8 @@ def _persist_result(db, run_pk, session_id, question, data_source_ids,
 
 def _build_trace(run_pk, question, t0, stages, final, semantic_meta,
                  skill_block, skill_ids, user_context=None, retrieval=None,
-                 cache_diff: dict | None = None) -> dict:
+                 cache_diff: dict | None = None,
+                 runtime_meta: dict | None = None) -> dict:
     """组装单次运行的可观测记录（写进 Run.trace，前端时间线与评估共用同一份）。"""
     execution = final.get("execution") or {}
     attempts = final.get("attempts", 0) or 0
@@ -438,6 +511,8 @@ def _build_trace(run_pk, question, t0, stages, final, semantic_meta,
         # Cost & Latency V1：成本与性能两段（回答"为什么调了 N 次 LLM / Token 花在哪 / 哪个阶段最慢"）
         "cost_control": build_cost_control_trace(final, llm_stats),
         "performance": build_performance_trace(final, stages, cache_diff),
+        # Production Runtime V1：排队 / 沙箱获取 / 容器复用 / 取消与超时归因
+        "runtime": build_runtime_trace(runtime_meta, execution, stages),
         "llm": llm_stats,
         "validation": validation,
         "final_status": "done" if validation["status"] != "fail" else "failed",
@@ -525,8 +600,64 @@ def build_performance_trace(final: dict, stages: list[dict] | None = None,
         "cache": cache_diff or {"hits": 0, "misses": 0, "hit_rate": 0.0,
                                 "by_category": {}},
         "context": ctx,
-        "queue_wait_ms": None,   # 当前架构没有队列等待（并发护栏是信号量，不计排队时长）
+        "queue_wait_ms": None,   # 运行时排队时长在 trace.runtime（并发槽位记录）
     }
+
+
+def build_runtime_trace(runtime_meta: dict | None, execution: dict,
+                        stages: list[dict] | None = None, status: str = "",
+                        reason: str = "", timeout_type: str = "") -> dict:
+    """运行时档案：`Run.trace.runtime`（Production Runtime V1）。
+
+    回答四类问题：
+    1. **这个请求为什么慢**——queue_wait_ms（排队）/ sandbox_acquire_ms（等容器）/
+       execution（代码执行）三段分开计；
+    2. **容器从哪来**——container_reused / container_created / container_uses
+       （warm pool 复用率的数据源）；
+    3. **为什么进 queue**——并发槽位获取时的 active / waiters 快照；
+    4. **为什么提前结束**——timeout_type（queue / execution / total_run）与
+       cancellation_reason。
+    """
+    meta = dict(runtime_meta or {})
+    pool_meta = dict((execution or {}).get("pool_meta") or {})
+    exec_stages = [s for s in (stages or []) if s.get("node") == "execute"]
+    registry_stats = {}
+    try:
+        from backend.analysis.concurrency import get_registry
+
+        registry_stats = get_registry().stats()
+    except Exception:
+        registry_stats = {}
+    t0 = meta.get("t0")
+    return {
+        "queue_wait_ms": int(float(meta.get("queue_wait_ms") or 0)),
+        "sandbox_acquire_ms": pool_meta.get("acquire_ms"),
+        "sandbox_mode": pool_meta.get("mode", ""),
+        "container_reused": pool_meta.get("container_reused"),
+        "container_created": pool_meta.get("container_created"),
+        "container_uses": pool_meta.get("container_uses"),
+        "container_key": pool_meta.get("container_key", ""),
+        "sandbox_executions": len(exec_stages),
+        "execution_ms": sum(s.get("duration_ms", 0) or 0 for s in exec_stages),
+        "total_runtime_ms": int((time.time() - t0) * 1000) if t0 else None,
+        "queue_length_at_acquire": pool_meta.get("queue_length"),
+        "concurrency_limit": registry_stats.get("concurrency_limit"),
+        "active_runs": registry_stats.get("active_runs"),
+        "queue_waiters": registry_stats.get("queue_waiters"),
+        "cancelled": status == "cancelled",
+        "cancellation_reason": reason if status == "cancelled" else "",
+        "timeout_type": timeout_type if status == "timeout" else "",
+        "sandbox_pool": _pool_stats_safe(),
+    }
+
+
+def _pool_stats_safe() -> dict:
+    try:
+        from backend.agent.sandbox_pool import get_pool
+
+        return get_pool().stats()
+    except Exception:
+        return {}
 
 
 

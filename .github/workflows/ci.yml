@@ -128,6 +128,35 @@ jobs:
               sys.exit(1)
           PY
 
+      # Runtime 门禁：Warm Pool vs Cold（离线仿真，measured=false）。
+      # 断言池与并发调度的真实行为：复用必须发生、负载后无容器泄漏、
+      # 单并发下 warm 必须快过 cold、池等待队列拒绝为 0（容量内不应拒绝）。
+      - name: Runtime Benchmark (Cold vs Warm Pool)
+        run: python -m backend.evaluation --runtime-benchmark --json /tmp/runtime.json
+      - name: Runtime regression gate
+        run: |
+          python - <<'PY'
+          import json, sys
+          r = json.load(open('/tmp/runtime.json'))
+          c1 = next(c for c in r['comparisons'] if c['concurrency'] == 1)
+          c20 = next(c for c in r['comparisons'] if c['concurrency'] == 20)
+          checks = [
+              ("基准自证非实测", r['measured'] is False and r['mode'] == 'offline_simulation'),
+              ("池预热成功", r['docker_warmup_succeeded'] is True),
+              ("无容器泄漏（idle+leased==size）", r['pool_leak_check'] is True),
+              ("warm 快过 cold（单并发 p50）", c1['warm_p50_ms'] < c1['cold_p50_ms']),
+              ("高并发下仍有吞吐收益", c20['throughput_gain'] > 1.5),
+              ("容量内无池等待拒绝", r['pool_final']['rejected_waiters'] == 0),
+              ("异常替换为 0（负载内容器全部健康）", r['pool_final']['crash_replacements'] == 0),
+          ]
+          failed = [name for name, ok in checks if not ok]
+          for name, ok in checks:
+              print(f"[{'PASS' if ok else 'FAIL'}] {name}")
+          if failed:
+              print(f"Runtime 门禁未通过：{failed}")
+              sys.exit(1)
+          PY
+
   frontend:
     runs-on: ubuntu-latest
     steps:

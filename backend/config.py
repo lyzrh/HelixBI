@@ -44,6 +44,34 @@ SANDBOX_CPUS = float(os.getenv("SANDBOX_CPUS", "2"))
 SANDBOX_MEMORY = os.getenv("SANDBOX_MEMORY", "2g")
 CODE_TIMEOUT_SECONDS = int(os.getenv("CODE_TIMEOUT_SECONDS", "120"))
 
+# ---- Production Runtime V1（warm pool / 并发控制 / 超时取消）----
+#
+# 沙箱预热池：0 = 关闭（每次执行仍是 docker run --rm 冷启动）。
+# 打开后启动期后台预热 N 个 `docker run -d` 容器（同样的 network none / CPU /
+# 内存 / pids 限制），执行走 `docker exec`，执行完清理工作目录再归还。
+# 容器用满 MAX_CONTAINER_USES 次强制回收重建（限制残留数据寿命）；
+# 异常容器立即销毁并后台补充；池满时调用方排队（最多 QUEUE 个等待者，
+# 超过 SANDBOX_ACQUIRE_TIMEOUT 秒拿不到就报 PoolTimeout，由上层降级为
+# 临时冷容器——绝不无限等、也绝不超开容器）。
+SANDBOX_POOL_SIZE = int(os.getenv("SANDBOX_POOL_SIZE", "2"))
+SANDBOX_POOL_MAX_USES = int(os.getenv("SANDBOX_POOL_MAX_USES", "25"))
+SANDBOX_POOL_QUEUE = int(os.getenv("SANDBOX_POOL_QUEUE", "8"))
+SANDBOX_ACQUIRE_TIMEOUT = float(os.getenv("SANDBOX_ACQUIRE_TIMEOUT", "30"))
+SANDBOX_STARTUP_TIMEOUT = float(os.getenv("SANDBOX_STARTUP_TIMEOUT", "60"))
+
+# 全局并发：同一时刻最多多少个分析运行真正执行（含 Skill 重放）；
+# 超出的进入等待队列（最多 RUN_QUEUE_SIZE 个，等超过 RUN_QUEUE_TIMEOUT 秒
+# 明确拒绝）。MAX_CONCURRENT_PER_USER 防止单个用户占满全部资源。
+MAX_CONCURRENT_RUNS = int(os.getenv("MAX_CONCURRENT_RUNS", "4"))
+MAX_CONCURRENT_PER_USER = int(os.getenv("MAX_CONCURRENT_PER_USER", "2"))
+RUN_QUEUE_SIZE = int(os.getenv("RUN_QUEUE_SIZE", "16"))
+RUN_QUEUE_TIMEOUT = float(os.getenv("RUN_QUEUE_TIMEOUT", "60"))
+
+# 整轮运行超时（秒；0 = 不限制）。覆盖排队 + 代码生成 + 沙箱执行 + 自修复 +
+# 结论整理的全过程；Self-Repair 的每一轮修复都要先过这道门，
+# 因此修复次数再多也不可能突破总时限。
+TOTAL_RUN_TIMEOUT_SECONDS = int(os.getenv("TOTAL_RUN_TIMEOUT_SECONDS", "900"))
+
 # ---- Self-Repair（错误分类 → 定向修复 → 有界重试 → 兜底）----
 #
 # MAX_FIX_ATTEMPTS 仍是**唯一全局上限**（每类错误的独立额度只会在它之内更早收手），
@@ -219,13 +247,17 @@ __all__ = [
     "LLM_TEMPERATURE", "MATERIALIZED_DIR", "MATERIALIZED_MAX_ROWS",
     "MATERIALIZED_TTL_HOURS", "MAX_FIX_ATTEMPTS", "MAX_INPUT_TOKENS_PER_RUN",
     "MAX_LLM_CALLS_PER_RUN", "MAX_OUTPUT_TOKENS_PER_RUN", "MAX_REPAIR_ATTEMPTS",
-    "MAX_RUN_COST_USD", "MAX_TOTAL_TOKENS_PER_RUN", "MAX_UPLOAD_MB", "MODEL_NAME",
+    "MAX_RUN_COST_USD",     "MAX_TOTAL_TOKENS_PER_RUN", "MAX_UPLOAD_MB", "MAX_CONCURRENT_PER_USER",
+    "MAX_CONCURRENT_RUNS", "MODEL_NAME",
     "OPENAI_API_KEY", "OPENAI_BASE_URL", "PROFILE_CACHE_ENABLED", "PROJECT_ROOT",
     "REFRESH_TOKEN_TTL_SECONDS", "REPAIR_OUTPUT_CHARS", "REPAIR_POLICY",
-    "REPAIR_REPEAT_LIMIT", "RUNS_DIR", "SECRET_KEY",
-    "SANDBOX_CPUS", "SANDBOX_IMAGE", "SANDBOX_MEMORY", "SEMANTIC_PACKS_DIR",
+    "REPAIR_REPEAT_LIMIT", "RUNS_DIR", "RUN_QUEUE_SIZE", "RUN_QUEUE_TIMEOUT",
+    "SECRET_KEY", "SANDBOX_ACQUIRE_TIMEOUT", "SANDBOX_CPUS", "SANDBOX_IMAGE",
+    "SANDBOX_MEMORY", "SANDBOX_POOL_MAX_USES", "SANDBOX_POOL_QUEUE",
+    "SANDBOX_POOL_SIZE", "SANDBOX_STARTUP_TIMEOUT", "SEMANTIC_PACKS_DIR",
     "SKILL_ADMISSION_HIGH", "SKILL_ADMISSION_LOW", "SKILL_ADMISSION_MARGIN",
     "SKILL_EXAMPLE_MAX_LINES", "SKILL_FEWSHOT_MAX",
     "SKILL_RETRIEVAL_MIN_SCORE", "SKILL_RETRIEVAL_TOP_K", "SKILL_RETRIEVAL_WEIGHTS",
-    "SUMMARIZE_TABLE_ROWS", "UPLOADS_DIR", "update_llm_config",
+    "SUMMARIZE_TABLE_ROWS", "TOTAL_RUN_TIMEOUT_SECONDS", "UPLOADS_DIR",
+    "update_llm_config",
 ]

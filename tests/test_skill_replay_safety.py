@@ -67,7 +67,7 @@ def _fake_sandbox(ok: bool, text: str = "结论"):
 
     from backend.agent.sandbox import SandboxResult
 
-    def _run(run_id, code, files):
+    def _run(run_id, code, files, runtime_limits=None):
         out = Path(list(files.values())[0]).parent / f"runs/{run_id}/out"
         out.mkdir(parents=True, exist_ok=True)
         payload = {"text": text, "tables": {"t": [{"a": 1}]}, "charts": []} if ok else {}
@@ -85,7 +85,7 @@ def _agent_stub(monkeypatch, called: list):
     def _run(run_pk, session_id, question, data_source_ids, spec, skill_block="",
              agent_id=None, on_event=None, skill_ids=None, user_context=None,
              retrieval=None, skill_candidates=None, context_policy=None,
-             budget_overrides=None):
+             budget_overrides=None, runtime_meta=None):
         called.append({"run_pk": run_pk, "skill_block": skill_block,
                        "retrieval": retrieval, "skill_ids": skill_ids})
         if on_event:

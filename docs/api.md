@@ -193,4 +193,8 @@ curl -X POST http://127.0.0.1:8000/api/auth/switch-workspace \
 - `settings` / `agents` / `insights` / `usage` 的权限点已细分（Security Hardening V1 新增 `analysis:read` / `usage:read` / `settings:write`；`agents` 的写入沿用 `workspace:manage`；`utils/export_table` 仅导出前端已持有数据，保持登录门）。
 - 完整安全设计、审计事件清单与剩余限制见 [docs/security.md](security.md)。
 - 成本 / 延迟指标口径、预算终止原因与上下文分块记账见 [docs/cost-latency-v1.md](cost-latency-v1.md)；一键复现 `python -m backend.evaluation --cost-benchmark`。
+- SSE 生命周期（`state` 事件）：`queued → preparing → running → repairing → validating → completed`，
+  异常终态 `cancelled / timeout / resource_limited / failed`——每个 run 必有终态，前端不会一直 loading；
+  运行时容量与沙箱池状态见 `GET /api/health` 的 `runtime` 段。
+- 运行时设计（warm pool / 并发 / 超时取消）见 [docs/production-runtime-v1.md](production-runtime-v1.md)。
 - 无刷新令牌与注销黑名单；`data_sources.password` 仍为明文字段。

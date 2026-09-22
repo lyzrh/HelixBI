@@ -32,6 +32,8 @@ Agent 内核 (backend/agent/)
    ├── intent.py    确定性意图快路径（命中即跳过 LLM 解析；"解释不了的内容"一律回落）
    ├── context.py   prompt 上下文装配（按命中口径收窄 / 去重 / 限额 + 分块 token 记账）
    ├── budget.py    LLM 运行预算（调用前预检 / 终止原因 / 结构化兜底）
+   ├── sandbox_pool.py warm 沙箱容器池（复用 / 回收 / 排队 / 降级冷启动；安全限制与冷启动一致）
+   ├── runerrors.py  运行期控制异常（取消 / 总时限；控制流必须穿透一切兜底）
    ├── followups.py 确定性追问推荐（hybrid：凑不满才补一次 LLM）
    ├── tokens.py    token 计数（tiktoken，失败降级为启发式估算并标注方法）
    ├── prompts.py   各节点 system / user 提示词（含按错误类别定制的修复处方）

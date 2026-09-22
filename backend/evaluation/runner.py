@@ -403,6 +403,21 @@ def eval_cost_optimization(limit: int | None = None) -> dict:
         return {"status": "error", "reason": f"成本基准执行失败：{exc}"}
 
 
+def eval_runtime_offline() -> dict:
+    """Runtime Benchmark：Cold Sandbox vs Warm Pool。
+
+    与 `eval_cost_optimization` 同一套诚实性约定：池与并发调度（租约 / 排队 /
+    超时 / 复用 / 回收 / 全局与单用户上限）是**真实代码**在真实线程里运行；
+    容器冷启动与执行耗时为建模常数。`mode="offline_simulation"` / `measured=False`。
+    """
+    from backend.evaluation import runtime_bench
+
+    try:
+        return runtime_bench.evaluate()
+    except Exception as exc:  # noqa: BLE001 — 基准失败要如实说
+        return {"status": "error", "reason": f"Runtime 基准执行失败：{exc}"}
+
+
 # ---- 8. 端到端（需 Docker + LLM，缺失则跳过） ----
 
 def pipeline_blocker() -> str | None:
@@ -547,6 +562,8 @@ def run_all(with_pipeline: bool = False, limit: int = 3) -> dict:
     report["self_repair_offline"] = eval_self_repair_offline()
     # Cost & Latency V1：改造前 vs 优化后的离线对照（调用次数 / prompt token / 确定性耗时）
     report["cost"] = eval_cost_optimization()
+    # Runtime V1：Cold vs Warm Pool 离线对照（真实池/并发代码，容器耗时建模）
+    report["runtime_offline"] = eval_runtime_offline()
 
     if with_pipeline:
         pipeline = eval_pipeline(cases, limit=limit)

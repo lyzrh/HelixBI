@@ -71,6 +71,8 @@
 | **可靠性** | 沙箱无网络 + CPU / 内存限制 + 数据只读；`dahelper` JSON 契约回传；SQLite 元数据库 WAL 模式；认证与权限在 API 层、运行时、工具执行前三次收口 |
 | **安全边界** | 产物 / 上传 / 缓存全部走**鉴权下发**（无匿名静态目录，含路径遍历防护与工作区归属反查）；数据源口令**应用级加密**（密钥只来自环境变量，缺密钥拒绝保存）；导出链路按工作区过滤；完整清单见 [docs/security.md](docs/security.md) |
 | **评估体系** | 65 条固定问题集（零售 / 制造 / 口语化对抗样例）+ **20 条对抗准入样例**（同指标不同维度 / 排序方向相反 / 时间窗变化 / 数据源变化 / 相似 Skill 竞争…）+ **12 条自修复失败场景** + **成本/延迟基准**（改造前 vs 优化后：调用次数 / prompt token / 确定性耗时 / 预算行为）+ 分阶段指标报告（语义解析 / 口径注入 / Skill 检索 / 重放准入 / 自修复 / 成本与延迟 / 效率）；基线可复现（策略与开关冻结留档），指标作为 CI 门禁进 pytest 与 CI |
+| **运行时（Production Runtime V1）** | **Warm Sandbox Pool**：预热容器池（安全限制与冷启动一致），`docker exec` 复用、执行完清理工作目录归还、用满强制回收重建、异常容器销毁补充、池满排队/超时自动降级冷启动；**并发控制**：全局 + 单用户上限 + 等待队列（超限明确拒绝）；**超时/取消**：排队/容器/执行/**整轮**四级超时 + 客户端断连取消（Self-Repair 也突破不了总时限）；`Run.trace.runtime` 回答「为什么慢：排队 / 等容器 / 执行」与「容器是复用还是新建」 |
+| **运行时（Production Runtime V1）** | **Warm Sandbox Pool**：预热容器池（安全限制与冷启动一致），`docker exec` 复用、执行完清理工作目录归还、用满强制回收重建、异常容器销毁补充、池满排队/超时自动降级冷启动；**并发控制**：全局 + 单用户上限 + 等待队列（超限明确拒绝）；**超时/取消**：排队/容器/执行/**整轮**四级超时 + 客户端断连取消（Self-Repair 也突破不了总时限）；`Run.trace.runtime` 回答「为什么慢：排队 / 等容器 / 执行」与「容器是复用还是新建」 |
 | **成本与延迟** | 成本感知路由：确定性意图快路径（命中即跳过 LLM 解析）+ Skill 重放（0 调用）+ 确定性追问 + 上下文装配器（按命中口径收窄语义层、few-shot 限流、去重）+ 运行预算（调用 / token / 成本上限，超限提前结束并说明原因）+ 确定性缓存（按文件指纹 / Skill 版本失效）；`Run.trace.cost_control` / `performance` 逐块记账，**「为什么调了 2 次 LLM」「Token 花在哪」「哪个阶段最慢」都能从数据回答** |
 | **可观测性** | 每轮分析落 `Run.trace`：分阶段耗时、LLM 调用与 token、**成本控制档案（调用归因 / 预算使用率 / 终止原因 / 意图与追问来源）**、**性能档案（阶段耗时 / 瓶颈 / 缓存命中 / prompt 分块记账）**、**Skill 检索档案（候选 8 路分数 / 选中项 / 准入结论 / 拒绝与 fallback 原因）**、**自修复档案（首次成功 / 修复次数 / 每轮错误类别与策略 / 每轮耗时 / 最终 success\|exhausted\|fallback）**、六项结果验收、**触发者用户 / 工作区 / 角色**；前端「运行时间线」面板可展开查看——Skill 重放的 `LLM calls == 0` 是数据不是文案 |
 
@@ -158,6 +160,10 @@ Docker 沙箱执行            无网络 + 资源限制 + 数据只读
 
 ## Evaluation（评估）
 
+`python -m backend.evaluation --runtime-benchmark` 输出 Cold Sandbox vs Warm Pool
+对照（启动延迟 / 排队 / 端到端 p50-p95 / 吞吐 / 复用率 / 泄漏检查；离线仿真）。
+`python -m backend.evaluation --runtime-benchmark` 输出 Cold Sandbox vs Warm Pool
+对照（启动延迟 / 排队 / 端到端 p50-p95 / 吞吐 / 复用率 / 泄漏检查；离线仿真）。
 `python -m backend.evaluation --cost-benchmark` 输出成本/延迟对照表（改造前 vs 优化后：
 调用次数 / prompt token / 确定性耗时 / 预算行为；离线可跑，**不是实测**）。
 `python -m backend.evaluation` 输出分阶段评估报告（离线可跑，不需 Docker / LLM；
@@ -203,6 +209,16 @@ Cost & Latency V1（离线：桩化 LLM/沙箱，调用次数与 prompt token �
   意图快路径命中率             81.5%                    覆盖率 81.5% / 严格准确率 100.0%
   追问零 LLM 率               100.0%                   基线 0.0%
   Skill 重放零 LLM 校验        6/6 断言通过               重放 = 0 调用 / 0 token / 不进自修复
+Runtime V1：Cold vs Warm Pool（离线仿真：池/并发调度真实代码，容器耗时建模）
+  单并发端到端 p50             101 ms     冷启动 1600 ms   吞吐 15.9x
+  20 并发端到端 p50            454 ms     冷启动 4000 ms   吞吐 7.9x
+  容器复用 / 回收 / 异常替换    61 次      回收 1 / 异常替换 0   泄漏检查 通过
+  └ 真实 Docker 实测           未采集     需 Docker 守护进程（诚实边界）
+Runtime V1：Cold vs Warm Pool（离线仿真：池/并发调度真实代码，容器耗时建模）
+  单并发端到端 p50             101 ms     冷启动 1600 ms   吞吐 15.9x
+  20 并发端到端 p50            454 ms     冷启动 4000 ms   吞吐 7.9x
+  容器复用 / 回收 / 异常替换    61 次      回收 1 / 异常替换 0   泄漏检查 通过
+  └ 真实 Docker 实测           未采集     需 Docker 守护进程（诚实边界）
 代码执行 / 自修复 / 端到端    需 Docker 沙箱，资源缺失时如实标注「未采集」
 ```
 
@@ -478,11 +494,17 @@ backend/                # FastAPI 服务（按业务领域组织）
   agent/                # Agent 内核：graph prompts profiler sandbox
                         #   + repair（错误分类 / 定向修复 / 有界重试）
                         #   + acceptance（结果验收硬门槛，validation 与 Self-Repair 共用）
+                        #   + sandbox_pool（warm 容器池：复用/回收/排队/降级）
+                        #   + runerrors（取消 / 总时限控制流）
+                        #   + sandbox_pool（warm 容器池：复用/回收/排队/降级）
+                        #   + runerrors（取消 / 总时限控制流）
                         #   + intent（确定性意图快路径）followups（确定性追问）
                         #   + context（prompt 上下文装配与分块记账）budget（运行预算）
                         #   + tokens（token 计数）
   analysis/             # Analysis Runtime（runtime）+ 自助分析（explore）
                         #   + cache（确定性缓存登记与命中统计）
+                        #   + concurrency（全局/单用户并发上限 + 等待队列）
+                        #   + concurrency（全局/单用户并发上限 + 等待队列）
   skills/               # Skill 沉淀 / 检索（retrieval：打分+准入）/ 重放（含作用域隔离）
   insights/             # 规则扫描（engine）+ 定时调度（scheduler）
   datasource/           # 文件 / DB 接入 + parquet 物化 + secrets（凭据加密 + 迁移）
@@ -504,6 +526,8 @@ frontend/               # React + AntD + Zustand + Vite
 tests/                  # pytest 套件（evaluation/ 指标门禁 + test_auth_rbac.py 权限用例）
 docs/                   # api.md（接口清单） + security.md（安全设计与剩余限制）
                         #   + cost-latency-v1.md（成本/延迟工程故事与基准）
+                        #   + production-runtime-v1.md（运行时工程故事与基准）
+                        #   + production-runtime-v1.md（运行时工程故事与基准）
                         #   + skill-retrieval-v2.md
                         #   + self-repair-v2.md（自修复工程故事与基准）+ README 图片
 examples/               # 示例数据（零售 / 生产 CSV，演示用生成数据）
@@ -567,7 +591,7 @@ curl http://127.0.0.1:8000/api/datasources \
 ## Roadmap
 
 - **R2**：仪表板图表前端化（ECharts 交互渲染替代 PNG）、洞察订阅推送、其余页面文案国际化（当前中英切换已覆盖导航 / 工作台 / 设置中心，登录页与工作区选择器仍为中文）；~~多用户与权限~~（✅ 已落地：登录 / 工作区 / UserContext / RBAC，见「认证与权限」）
-- **R3**：~~评估集回归~~（✅ 已落地：`backend/evaluation/` + `tests/evaluation/` 门禁；下一步扩充问题集并采集沙箱执行指标）、~~成本与延迟优化~~（✅ 已落地：Cost & Latency V1，见 [docs/cost-latency-v1.md](docs/cost-latency-v1.md)；下一步做沙箱容器预热池与流式结论）、语义包可视化编辑器、指标血缘
+- **R3**：~~评估集回归~~（✅ 已落地：`backend/evaluation/` + `tests/evaluation/` 门禁；下一步扩充问题集并采集沙箱执行指标）、~~成本与延迟优化~~（✅ 已落地：Cost & Latency V1，见 [docs/cost-latency-v1.md](docs/cost-latency-v1.md)；沙箱容器预热池与并发/超时控制已随 Production Runtime V1 落地，见 [docs/production-runtime-v1.md](docs/production-runtime-v1.md)；下一步做流式结论）、语义包可视化编辑器、指标血缘
 - **安全加固（P1）**：~~静态产物目录鉴权~~、~~数据库密码加密存储~~、~~刷新令牌与注销~~、~~按权限点细分设置 / 用量 / 分析类接口~~（✅ 已落地：Security Hardening V1，见 [docs/security.md](docs/security.md)；剩余限制也写在该文档里）
 - **架构演进（P2）**：`backend/routers/` → `api/`、`config/db/models/schemas` 收敛到 `core/`；前端引入 `features/` 分域（详见 [.agents/rules/architecture.md](.agents/rules/architecture.md)）
 

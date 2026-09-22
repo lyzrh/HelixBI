@@ -1,4 +1,19 @@
-"""分析路由：SSE 流式分析 + 意图解析 + 运行详情/重跑。"""
+"""分析路由：SSE 流式分析 + 意图解析 + 运行详情/重跑。
+
+SSE 生命周期（Production Runtime V1）：
+
+    queued → preparing → running → repairing → validating → completed
+    异常态：cancelled / timeout / resource_limited / failed
+
+并发策略：全局 `MAX_CONCURRENT_RUNS` + 单用户 `MAX_CONCURRENT_PER_USER`，
+超出的请求排队（`RUN_QUEUE_SIZE` 个等待者，超过 `RUN_QUEUE_TIMEOUT` 秒明确
+超时）。排队与执行都在 SSE 流内完成——客户端能实时看到自己"在排队"，
+而不是对着一个 429 或无限转圈。
+
+断连策略：客户端断开后，后端设置**取消事件**，运行在下一个节点边界收尾并落库
+为 `cancelled` 终态（释放并发槽位与沙箱容器）——不会无限占用资源，
+已产生的部分结果通过 `/runs/recent` 仍可回访。
+"""
 
 import asyncio
 import json
@@ -8,6 +23,10 @@ from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
 
+from backend.agent.runerrors import RunCancelled, RunDeadlineExceeded
+from backend.analysis.concurrency import (
+    RunQueueTimeout, RunRejected, get_registry,
+)
 from backend.auth.context import UserContext
 from backend.auth.deps import get_current_context, require_permission
 from backend.db import get_db
@@ -17,50 +36,89 @@ from backend.analysis import runtime as analysis_runner
 
 router = APIRouter(prefix="", dependencies=[Depends(get_current_context)])
 
-# 并发护栏：Docker 沙箱资源有限（2 CPU / 2G / 容器）
-_semaphore = asyncio.Semaphore(2)
-
 SSE_HEADERS = {
     "Cache-Control": "no-cache",
     "X-Accel-Buffering": "no",
     "Connection": "keep-alive",
 }
 
+# 断连后仍在后台收尾的任务（保持引用防止 GC；终态落库后自行退出）
+_background_tasks: set[asyncio.Task] = set()
+
 
 def _sse_frame(event: str, data: dict) -> str:
     return f"event: {event}\ndata: {json.dumps(data, ensure_ascii=False)}\n\n"
 
 
-async def sse_stream(work) -> StreamingResponse:
-    """把「在线程池里跑的阻塞任务」桥接成 SSE 响应。
+async def sse_stream(work_factory, ctx: UserContext | None = None) -> StreamingResponse:
+    """把「在线程池里跑的阻塞任务」桥接成 SSE 响应，并接管运行生命周期。
 
-    `work` 是一个接受 `on_event(event, data)` 的可调用对象。
-    调用方必须先持有 `_semaphore`（本函数在流结束时负责释放）。
+    `work_factory(slot)` 返回一个接受 `on_event(event, data)` 的可调用对象；
+    `slot` 是并发槽位（携带取消事件 / 总时限 / 排队耗时，由 work 透传给运行时）。
+
+    生命周期事件（`state`）由本函数与运行时共同发出：
+    queued / preparing / running 由这里发，repairing / validating / completed /
+    cancelled / timeout / failed 由运行时按真实进度发。
     """
     loop = asyncio.get_running_loop()
     queue: asyncio.Queue = asyncio.Queue()
+    registry = get_registry()
 
     def on_event(event: str, data: dict):
         loop.call_soon_threadsafe(queue.put_nowait, (event, data))
 
-    async def worker():
+    async def worker(slot):
         try:
-            await loop.run_in_executor(None, lambda: work(on_event))
+            with slot:
+                on_event("state", {"phase": "running"})
+                work = work_factory(slot)
+                await loop.run_in_executor(None, lambda: work(on_event))
+        except RunCancelled as exc:
+            on_event("state", {"phase": "cancelled", "reason": str(exc)[:160]})
+        except RunDeadlineExceeded as exc:
+            on_event("state", {"phase": "timeout",
+                               "timeout_type": getattr(exc, "timeout_type", "total_run"),
+                               "reason": str(exc)[:160]})
+        except Exception as exc:  # noqa: BLE001 — 任何异常都要给前端终态
+            on_event("state", {"phase": "failed", "reason": str(exc)[:160]})
+            on_event("error", {"message": str(exc)})
         finally:
             loop.call_soon_threadsafe(queue.put_nowait, (None, None))
 
     async def gen():
-        task = asyncio.create_task(worker())
+        stats = registry.stats()
+        yield _sse_frame("state", {"phase": "queued",
+                                   "queue_length": stats.get("queue_waiters", 0),
+                                   "concurrency_limit": stats.get("concurrency_limit")})
+        try:
+            slot = await loop.run_in_executor(
+                None, lambda: registry.acquire(ctx.user_id if ctx else None))
+        except RunRejected as exc:
+            yield _sse_frame("state", {"phase": "resource_limited",
+                                       "reason": str(exc)[:160]})
+            return
+        except RunQueueTimeout as exc:
+            yield _sse_frame("state", {"phase": "timeout", "timeout_type": "queue",
+                                       "reason": str(exc)[:160]})
+            return
+        yield _sse_frame("state", {"phase": "preparing",
+                                   "queue_wait_ms": int(slot.queue_wait_s * 1000)})
+
+        task = asyncio.create_task(worker(slot))
+        _background_tasks.add(task)
+        task.add_done_callback(_background_tasks.discard)
         try:
             while True:
                 event, data = await queue.get()
                 if event is None:
                     break
                 yield _sse_frame(event, data)
+            await task  # 正常完成：等 worker 收尾（断连路径不走这里，见 finally）
         finally:
-            _semaphore.release()
             if not task.done():
-                await task
+                # 客户端断开：设置取消事件，任务在下一个节点边界收尾落库
+                # （cancelled 终态）并释放槽位与容器；这里不 await，不阻塞断开。
+                slot.cancel_event.set()
 
     return StreamingResponse(gen(), media_type="text/event-stream", headers=SSE_HEADERS)
 
@@ -75,10 +133,6 @@ async def analyze(sid: int, body: AnalyzeBody, db: Session = Depends(get_db),
         raise HTTPException(403, "会话不属于当前工作区")
     if not body.data_source_ids:
         raise HTTPException(400, "请至少选择一个数据源")
-
-    if _semaphore.locked():
-        raise HTTPException(429, "已有分析任务在执行中，请稍候再试")
-    await _semaphore.acquire()
 
     # 请求作用域内完成 Skill 路由：Retrieval（召回）→ Admission（准入）→ 重放 or Agent
     from backend.skills import engine as skill_engine
@@ -103,13 +157,21 @@ async def analyze(sid: int, body: AnalyzeBody, db: Session = Depends(get_db),
         db.commit()
         skill_pk = decision.selected_skill_id
 
-        def work(on_event):
-            return skill_engine.run_skill(
-                skill_pk, sid, list(body.data_source_ids), on_event,
-                workspace_id=ctx.workspace_id, question=body.question,
-                decision=decision, routing_ms=routing_ms)
+        def replay_factory(slot):
+            runtime_meta = {"queue_wait_ms": slot.queue_wait_s * 1000,
+                            "cancel": slot.cancel_event,
+                            "deadline_ts": slot.deadline_ts}
 
-        return await sse_stream(work)
+            def work(on_event):
+                return skill_engine.run_skill(
+                    skill_pk, sid, list(body.data_source_ids), on_event,
+                    workspace_id=ctx.workspace_id, question=body.question,
+                    decision=decision, routing_ms=routing_ms,
+                    runtime_meta=runtime_meta)
+
+            return work
+
+        return await sse_stream(replay_factory, ctx)
 
     user_msg = Message(session_id=sid, role="user", content=body.question)
     db.add(user_msg)
@@ -123,16 +185,24 @@ async def analyze(sid: int, body: AnalyzeBody, db: Session = Depends(get_db),
     run_pk = run.id
     db.commit()
 
-    def work(on_event):
-        return analysis_runner.run_analysis_stream(
-            run_pk, sid, body.question, list(body.data_source_ids),
-            body.spec, skill_block, body.agent_id, on_event,
-            skill_ids=[s.id for s in skills],
-            retrieval={**decision.to_dict(), "routing_ms": routing_ms},
-            skill_candidates=skills,
-        )
+    def agent_factory(slot):
+        runtime_meta = {"queue_wait_ms": slot.queue_wait_s * 1000,
+                        "cancel": slot.cancel_event,
+                        "deadline_ts": slot.deadline_ts}
 
-    return await sse_stream(work)
+        def work(on_event):
+            return analysis_runner.run_analysis_stream(
+                run_pk, sid, body.question, list(body.data_source_ids),
+                body.spec, skill_block, body.agent_id, on_event,
+                skill_ids=[s.id for s in skills],
+                retrieval={**decision.to_dict(), "routing_ms": routing_ms},
+                skill_candidates=skills,
+                runtime_meta=runtime_meta,
+            )
+
+        return work
+
+    return await sse_stream(agent_factory, ctx)
 
 
 @router.post("/sessions/{sid}/parse")
@@ -226,9 +296,9 @@ async def rerun(rid: int, db: Session = Depends(get_db),
     if session.workspace_id not in (ctx.workspace_id, None):
         raise HTTPException(403, "会话不属于当前工作区")
 
-    if _semaphore.locked():
-        raise HTTPException(429, "已有分析任务在执行中，请稍候再试")
-    await _semaphore.acquire()
+    data_source_ids = jload(run.data_source_ids, [])
+    if not data_source_ids:
+        raise HTTPException(400, "原运行未关联数据源，无法重跑")
 
     user_msg = Message(session_id=run.session_id, role="user",
                        content=run.question + "（重跑）")
@@ -242,14 +312,21 @@ async def rerun(rid: int, db: Session = Depends(get_db),
     run_pk = new_run.id
     db.commit()
 
-    data_source_ids = jload(run.data_source_ids, [])
     spec = jload(run.spec)
 
-    def work(on_event):
-        return analysis_runner.run_analysis_stream(
-            run_pk, run.session_id, run.question, data_source_ids,
-            spec, "", None, on_event,
-            user_context=ctx.to_dict(),
-        )
+    def work_factory(slot):
+        runtime_meta = {"queue_wait_ms": slot.queue_wait_s * 1000,
+                        "cancel": slot.cancel_event,
+                        "deadline_ts": slot.deadline_ts}
 
-    return await sse_stream(work)
+        def work(on_event):
+            return analysis_runner.run_analysis_stream(
+                run_pk, run.session_id, run.question, data_source_ids,
+                spec, "", None, on_event,
+                user_context=ctx.to_dict(),
+                runtime_meta=runtime_meta,
+            )
+
+        return work
+
+    return await sse_stream(work_factory, ctx)

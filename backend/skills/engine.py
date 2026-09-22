@@ -190,7 +190,7 @@ def visible_skills(db, workspace_id: int | None = None, user_id: int | None = No
 def run_skill(skill_pk: int, session_id: int | None, data_source_ids: list[int],
               on_event=None, workspace_id: int | None = None,
               question: str | None = None, decision=None,
-              routing_ms: int = 0) -> dict:
+              routing_ms: int = 0, runtime_meta: dict | None = None) -> dict:
     """在工作线程中运行 Skill，返回落库摘要。
 
     两种模式（由 `_replay_gate` 决定）：
@@ -205,6 +205,12 @@ def run_skill(skill_pk: int, session_id: int | None, data_source_ids: list[int],
     """
     t0 = time.time()
     emit = on_event or (lambda *_: None)
+    runtime_meta = dict(runtime_meta or {})
+    runtime_limits = {"cancel": runtime_meta.get("cancel"),
+                      "deadline_ts": runtime_meta.get("deadline_ts")}
+    from backend.agent.runerrors import check_runtime_limits
+
+    check_runtime_limits(runtime_limits)
     skipped_reason = ""
     try:
         with SessionLocal() as db:
@@ -256,7 +262,7 @@ def run_skill(skill_pk: int, session_id: int | None, data_source_ids: list[int],
             if replay:
                 summary = _replay(db, skill, session_id, data_source_ids, files, emit, t0,
                                   question=run_question, retrieval=_decision_dict(decision),
-                                  routing_ms=routing_ms)
+                                  routing_ms=routing_ms, runtime_limits=runtime_limits)
                 if summary.get("ok"):
                     emit("step", {"node": "skill", "label": f"运行 Skill「{skill.name}」",
                                   "status": "done"})
@@ -285,6 +291,7 @@ def run_skill(skill_pk: int, session_id: int | None, data_source_ids: list[int],
             skill_spec, skill_block, None, emit,
             skill_ids=[skill_id],
             retrieval=_fallback_record(decision, skipped_reason),
+            runtime_meta=runtime_meta,
         )
         with SessionLocal() as db:
             s2 = db.get(Skill, skill_id)
@@ -294,6 +301,10 @@ def run_skill(skill_pk: int, session_id: int | None, data_source_ids: list[int],
             db.commit()
         return summary
     except Exception as exc:
+        from backend.agent.runerrors import RunCancelled, RunDeadlineExceeded
+
+        if isinstance(exc, (RunCancelled, RunDeadlineExceeded)):
+            raise  # 控制流上抛给 SSE 层（不是"重放失败"，不触发 Agent 兜底）
         import traceback
         traceback.print_exc()
         emit("error", {"message": str(exc)})
@@ -354,14 +365,14 @@ def _create_run(db, session_id, question, data_source_ids, skill_id,
 
 def _replay(db, skill, session_id, data_source_ids, files, emit, t0,
             question: str | None = None, retrieval: dict | None = None,
-            routing_ms: int = 0) -> dict:
+            routing_ms: int = 0, runtime_limits: dict | None = None) -> dict:
     """列匹配 → 直接重放代码（不经过 LLM）。"""
     code = _normalize_data_paths(skill.code, files)
 
     run_pk = _create_run(db, session_id, question or skill.question,
                          data_source_ids, skill.id)
     run_id = f"skill-{uuid.uuid4().hex[:8]}"
-    result = run_in_sandbox(run_id, code, files)
+    result = run_in_sandbox(run_id, code, files, runtime_limits=runtime_limits)
     execution = {
         "ok": result.ok, "stdout": result.stdout, "stderr": result.stderr,
         "text": result.text, "tables": result.tables, "charts": result.charts,

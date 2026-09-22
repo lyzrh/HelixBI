@@ -77,6 +77,25 @@ export function applyEvent(st: StreamingState, evt: { event: string; data: any }
     case 'done':
       next.running = false;
       break;
+    case 'state': {
+      // Production Runtime V1 生命周期：queued / preparing / running / repairing /
+      // validating / completed + 异常态 cancelled / timeout / resource_limited / failed。
+      // 异常态必须终结 loading（后端保证每个 run 都会落到一个终态）。
+      const d = evt.data as { phase: string; reason?: string; timeout_type?: string };
+      next.phase = d.phase;
+      if (d.reason) next.phaseReason = d.reason;
+      if (['cancelled', 'timeout', 'resource_limited', 'failed'].includes(d.phase)) {
+        next.running = false;
+        if (d.phase === 'timeout') {
+          next.error = `运行超时（${d.timeout_type === 'queue' ? '排队' : '执行'}超时）${d.reason ? `：${d.reason}` : ''}`;
+        } else if (d.phase === 'resource_limited') {
+          next.error = d.reason || '资源繁忙，请稍后再试';
+        } else if (d.phase === 'cancelled') {
+          next.error = '运行已取消';
+        }
+      }
+      break;
+    }
   }
   return next;
 }

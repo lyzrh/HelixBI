@@ -36,12 +36,23 @@ def sandbox_available() -> bool:
 
 @router.get("/health")
 def health():
+    def _runtime_stats() -> dict:
+        try:
+            from backend.agent.sandbox_pool import get_pool
+            from backend.analysis.concurrency import get_registry
+
+            return {"concurrency": get_registry().stats(),
+                    "sandbox_pool": get_pool().stats()}
+        except Exception:
+            return {}
+
     return {
         "status": "ok",
         "sandbox": sandbox_available(),
         "model": config.MODEL_NAME if config.OPENAI_API_KEY else "",
         "llm_configured": bool(config.OPENAI_API_KEY),
         "packs": list_packs(),
+        "runtime": _runtime_stats(),
     }
 
 

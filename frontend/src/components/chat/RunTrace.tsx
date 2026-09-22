@@ -81,6 +81,13 @@ function TraceBody({ trace }: { trace: RunTrace }) {
     : '';
   const genContext = perf?.context?.generation;
   const contextBlocks = genContext?.blocks || [];
+  // Production Runtime V1：排队 / 容器复用 / 取消与超时归因
+  const rt = trace.runtime;
+  const sandboxTag = rt?.sandbox_mode === 'warm'
+    ? { color: 'green', text: `warm 容器${rt?.container_reused ? '（复用）' : '（新建）'}` }
+    : rt?.sandbox_mode === 'cold'
+      ? { color: 'orange', text: '冷启动' }
+      : undefined;
 
   return (
     <div>
@@ -92,6 +99,10 @@ function TraceBody({ trace }: { trace: RunTrace }) {
         <StatItem label="代码执行" value={`${trace.execution?.ok ? '成功' : '失败'} / ${trace.execution?.attempts ?? 1} 次`} />
         {(trace.execution?.repair_count ?? 0) > 0
           && <StatItem label="自修复" value={`${trace.execution.repair_count} 次`} />}
+        {(rt?.queue_wait_ms ?? 0) > 0 && <StatItem label="排队" value={fmtMs(rt?.queue_wait_ms)} />}
+        {sandboxTag && (
+          <StatItem label="沙箱" value={<Tag color={sandboxTag.color} style={{ margin: 0 }}>{sandboxTag.text}</Tag>} />
+        )}
         <StatItem
           label="结果验收"
           value={<Tag color={validation.color} style={{ margin: 0 }}>{validation.text}</Tag>}

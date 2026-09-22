@@ -214,7 +214,7 @@ class ScriptedExecutor:
             return True
         return self.occurrences >= int(current.get("repeat", 4))
 
-    def __call__(self, run_id, code, files):  # noqa: ARG002 — 与 run_in_sandbox 同签名
+    def __call__(self, run_id, code, files, runtime_limits=None):  # noqa: ARG002 — 与 run_in_sandbox 同签名
         self.executions += 1
         strategy = self._current_strategy() if self.executions > 1 else ""
         if self._advance(strategy):

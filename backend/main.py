@@ -5,6 +5,8 @@
 
 from contextlib import asynccontextmanager
 
+import os
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles  # noqa: F401 — 仅生产模式 /assets 使用
@@ -27,6 +29,12 @@ async def lifespan(app: FastAPI):
     app_config.LLM_TEMPERATURE = prefs.get("temperature", 0.0)
     from backend.insights.scheduler import start_scheduler, stop_scheduler
     start_scheduler()  # 定时洞察扫描后台循环
+    # Warm Sandbox Pool 预热（Production Runtime V1）：后台线程，失败静默降级
+    # （Docker 未启动 / 镜像缺失时池标记 degraded，执行自动走冷启动路径）
+    if os.getenv("SANDBOX_POOL_SIZE", "2") not in ("0", ""):
+        from backend.agent.sandbox_pool import warm_pool_async
+
+        warm_pool_async()
     yield
     stop_scheduler()
 

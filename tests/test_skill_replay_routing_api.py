@@ -119,7 +119,7 @@ def fake_sandbox(monkeypatch):
 
     calls: list = []
 
-    def _run(run_id, code, files):
+    def _run(run_id, code, files, runtime_limits=None):
         calls.append({"run_id": run_id, "code": code})
         out = _Path(list(files.values())[0]).parent / f"runs/{run_id}/out"
         out.mkdir(parents=True, exist_ok=True)
@@ -174,7 +174,7 @@ def test_low_confidence_query_goes_to_agent(app_env, setup, fake_sandbox, monkey
     def _agent(run_pk, session_id, question, data_source_ids, spec, skill_block="",
                agent_id=None, on_event=None, skill_ids=None, user_context=None,
                retrieval=None, skill_candidates=None, context_policy=None,
-               budget_overrides=None):
+               budget_overrides=None, runtime_meta=None):
         agent_calls.append({"retrieval": retrieval, "skill_block": skill_block})
         if on_event:
             on_event("done", {"ok": True})

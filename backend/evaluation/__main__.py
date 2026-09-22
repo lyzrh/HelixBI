@@ -124,6 +124,23 @@ def _run_cost_benchmark(args) -> int:
     return 0
 
 
+def _run_runtime_benchmark(args) -> int:
+    """Runtime Benchmark：Cold Sandbox vs Warm Pool（离线仿真，measured=false）。"""
+    from backend.evaluation import runtime_bench as bench
+
+    result = bench.evaluate()
+    markdown = bench.render_markdown(result)
+    print(markdown)
+    if args.markdown:
+        Path(args.markdown).write_text(markdown + "\n", encoding="utf-8")
+        print(f"\n已写出 Markdown：{args.markdown}")
+    if args.json_path:
+        Path(args.json_path).write_text(
+            json.dumps(result, ensure_ascii=False, indent=2), encoding="utf-8")
+        print(f"\n已写出 JSON：{args.json_path}")
+    return 0
+
+
 def _run_tuning(args) -> int:
     from backend import config
     from backend.evaluation import retrieval_bench as bench
@@ -163,6 +180,8 @@ def main(argv: list[str] | None = None) -> int:
                         help="只跑 Self-Repair Baseline(V1) vs V2 对照（离线策略仿真）")
     parser.add_argument("--cost-benchmark", action="store_true",
                         help="只跑成本/延迟对照：改造前 vs Cost & Latency Optimization V1")
+    parser.add_argument("--runtime-benchmark", action="store_true",
+                        help="只跑 Runtime Benchmark：Cold Sandbox vs Warm Pool（离线仿真）")
     parser.add_argument("--cost-limit", type=int, default=0,
                         help="配合 --cost-benchmark：只跑前 N 条问题（默认全量 65 条）")
     parser.add_argument("--repair-live", action="store_true",
@@ -180,6 +199,8 @@ def main(argv: list[str] | None = None) -> int:
         return _run_repair_benchmark(args)
     if args.cost_benchmark:
         return _run_cost_benchmark(args)
+    if args.runtime_benchmark:
+        return _run_runtime_benchmark(args)
     if args.tune_weights:
         return _run_tuning(args)
 

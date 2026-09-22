@@ -44,6 +44,18 @@
 - 新增依赖先确认必要性，写入 `requirements.txt`；不要引入重量级框架替换现有 LangGraph 链路。
 - 新增 / 移动领域目录、改动认证与权限行为时，同一次提交里同步更新 `AGENTS.md` 架构地图、`.agents/rules/` 与 `docs/api.md`。
 
+## 运行时纪律（Production Runtime V1）
+
+- **沙箱执行一律走 `agent/sandbox.py::run_in_sandbox`**（warm pool → 冷启动 → 结构化失败的
+  降级阶梯已内建），不要绕过它直接 `docker run`；warm 容器的安全限制必须与冷启动逐项一致。
+- **取消 / 总时限是控制流**：`RunCancelled` / `RunDeadlineExceeded`（`agent/runerrors.py`）
+  必须穿透一切兜底分支（Skill 重放兜底、意图解析回退、追问降级都不得吞掉）；
+  在任何阻塞动作（LLM 调用 / 沙箱执行）前调用 `check_runtime_limits`。
+- **并发必须过 `analysis/concurrency.py::get_registry`**（全局 + 单用户 + 队列）；
+  等待队列满 = `RunRejected` 明确拒绝，不允许静默无限排队。
+- 运行时指标写 `Run.trace.runtime`（queue_wait / sandbox_acquire / container_reused /
+  timeout_type / cancellation_reason）；运行时容量统计在 `/api/health.runtime`。
+
 ## 启动与验证
 
 ```bash

@@ -310,6 +310,33 @@ def render_report(report: dict) -> str:
                           "重放 = 0 调用 / 0 token / 不进自修复", indent=1))
         lines.append(_row("└ Token 计数方法", "", cost.get("token_counter", ""), indent=1))
 
+    rt = report.get("runtime_offline", {})
+    if rt.get("mode") == "offline_simulation":
+        by1 = next((c for c in rt["comparisons"] if c["concurrency"] == 1), None)
+        by20 = next((c for c in rt["comparisons"] if c["concurrency"] == 20), None)
+        pf = rt.get("pool_final", {})
+        lines.append("Runtime V1：Cold Sandbox vs Warm Pool（离线仿真："
+                     "池与并发调度为真实代码，容器耗时建模；measured=false）")
+        if by1:
+            lines.append(_row("单并发端到端 p50",
+                              f"{by1['warm_p50_ms']:.0f} ms",
+                              f"冷启动 {by1['cold_p50_ms']:.0f} ms  "
+                              f"吞吐 {by1['throughput_gain']:.1f}x", indent=1))
+        if by20:
+            lines.append(_row("20 并发端到端 p50",
+                              f"{by20['warm_p50_ms']:.0f} ms",
+                              f"冷启动 {by20['cold_p50_ms']:.0f} ms  "
+                              f"吞吐 {by20['throughput_gain']:.1f}x  "
+                              f"降级 {by20['fallback_to_cold']} 次", indent=1))
+        lines.append(_row("容器复用 / 回收 / 异常替换",
+                          f"{pf.get('reuse_count', 0)} 次",
+                          f"回收 {pf.get('recycles', 0)} / 异常替换 "
+                          f"{pf.get('crash_replacements', 0)}  "
+                          f"泄漏检查 {'通过' if rt.get('pool_leak_check') else '失败'}",
+                          indent=1))
+        lines.append(_row("└ 真实 Docker 实测", "未采集",
+                          "需 Docker 守护进程（诚实边界）", indent=1))
+
     lines.append("-" * 66)
     lines.append("以下阶段需要 Docker 沙箱 / LLM，资源缺失时显示「未采集」而非编造数字：")
     for key, label in (("execution", "代码执行成功率"), ("self_repair", "自修复成功率"),

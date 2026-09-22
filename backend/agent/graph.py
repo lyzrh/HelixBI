@@ -44,6 +44,7 @@ from . import repair as repair_mod
 from . import tokens as token_mod
 from .acceptance import acceptance_gate
 from .profiler import profile_all
+from .runerrors import check_runtime_limits
 from .sandbox import SandboxResult, run_in_sandbox
 
 logger = logging.getLogger(__name__)
@@ -199,7 +200,10 @@ def _guarded_invoke(state: "AgentState", node: str, messages: list):
 
     `response is None` 表示**这次调用被预算拦下**（UPDATE 里带终止原因），
     调用方必须走确定性兜底，不允许伪造结果。
+    Production Runtime V1：调用前先过取消 / 总时限检查（Self-Repair 的每一轮
+    修复都要回到 generate_code → 这里，因此修复次数再多也突破不了总时限）。
     """
+    check_runtime_limits(state.get("runtime_limits"))
     budget, used = _budget_of(state)
     estimated_input = token_mod.count_messages(messages)
     decision = budget_mod.precheck(budget, used, node, estimated_input)
@@ -336,6 +340,8 @@ class AgentState(TypedDict):
     summarize_source: str        # llm | deterministic（预算拦下结论整理时走确定性兜底）
     generate_blocked: bool       # 生成本身被预算拦下（没有新代码可执行）
     context_stats: dict          # 各节点最后一次装配的分块 token 记账
+    # ---- Production Runtime V1 state ----
+    runtime_limits: dict         # {"cancel": Event, "deadline_ts": float|None}（见 runerrors.py）
 
 
 
@@ -439,7 +445,13 @@ def parse_intent(state: AgentState) -> dict:
         spec.setdefault("source", "llm")
         update.update({"spec": spec, "intent_source": "llm", "intent_meta": meta})
         return update
+    except (RuntimeError, MemoryError):
+        raise
     except Exception as exc:
+        from .runerrors import RunCancelled, RunDeadlineExceeded
+
+        if isinstance(exc, (RunCancelled, RunDeadlineExceeded)):
+            raise  # 取消 / 超时是控制流，不是"解析失败"——绝不能被兜底吞掉
         logger.warning("parse_intent 失败，回退为原始问题: %s", exc)
         return {"spec": {"rewritten_question": state["question"], "source": "fallback"},
                 "intent_source": "fallback",
@@ -509,10 +521,13 @@ def execute(state: AgentState) -> dict:
         from backend.auth.context import permission_checker
 
         permission_checker.require(user_context, "analysis:execute")
+    # 取消 / 总时限预检：包括自修复的每一轮——修复次数再多也突破不了 total run timeout
+    check_runtime_limits(state.get("runtime_limits"))
     run_id = state.get("question", "run")[:8].replace(" ", "_") or "run"
     run_id = f"{run_id}-{uuid.uuid4().hex[:6]}"
     files = state["files"]
-    result: SandboxResult = run_in_sandbox(run_id, state.get("code", ""), files)
+    result: SandboxResult = run_in_sandbox(run_id, state.get("code", ""), files,
+                                           runtime_limits=state.get("runtime_limits"))
     execution = {
         "ok": result.ok,
         "stdout": result.stdout,
@@ -525,6 +540,8 @@ def execute(state: AgentState) -> dict:
         "exit_code": result.exit_code,
         "timed_out": result.timed_out,
         "failure_kind": result.failure_kind,
+        # warm pool 元数据：容器是复用还是新创建、排队了多久（trace.runtime）
+        "pool_meta": getattr(result, "pool_meta", None) or {},
     }
     return {"execution": execution, "attempts": state["attempts"] + 1}
 
@@ -674,7 +691,11 @@ def suggest_followups(state: AgentState) -> dict:
     ]
     try:
         response, update = _guarded_invoke(state, "followup", messages)
-    except Exception:
+    except Exception as exc:
+        from .runerrors import RunCancelled, RunDeadlineExceeded
+
+        if isinstance(exc, (RunCancelled, RunDeadlineExceeded)):
+            raise  # 控制流不吞
         return {"followups": candidates, "followup_source": "deterministic"}
     update["context_stats"] = {**(state.get("context_stats") or {}),
                                "followup": assembly.stats()}
@@ -741,6 +762,7 @@ def _initial_state(
     skill_candidates: list | None = None,
     context_policy: str | None = None,
     budget_overrides: dict | None = None,
+    runtime_limits: dict | None = None,
 ) -> AgentState:
     workspace_id = (user_context or {}).get("workspace_id")
     return {
@@ -791,6 +813,8 @@ def _initial_state(
         "summarize_source": "",
         "generate_blocked": False,
         "context_stats": {},
+        # Production Runtime V1：取消事件 + 总时限（None/空 = 不限制，行为同改造前）
+        "runtime_limits": dict(runtime_limits or {}),
     }
 
 
@@ -809,6 +833,7 @@ def run_analysis(
     skill_candidates: list | None = None,
     context_policy: str | None = None,
     budget_overrides: dict | None = None,
+    runtime_limits: dict | None = None,
 ) -> AgentState:
     app = build_graph()
     initial = _initial_state(question, files, history, spec, semantic_block, skill_block,
@@ -817,7 +842,8 @@ def run_analysis(
                              semantic_packs=semantic_packs,
                              skill_candidates=skill_candidates,
                              context_policy=context_policy,
-                             budget_overrides=budget_overrides)
+                             budget_overrides=budget_overrides,
+                             runtime_limits=runtime_limits)
     return app.invoke(initial)
 
 
@@ -836,9 +862,16 @@ def stream_analysis(
     skill_candidates: list | None = None,
     context_policy: str | None = None,
     budget_overrides: dict | None = None,
+    runtime_limits: dict | None = None,
 ):
     """Run the graph yielding (node, delta, merged_state) after every node,
-    so the UI can render DB-GPT-style live steps while the agent works."""
+    so the UI can render DB-GPT-style live steps while the agent works.
+
+    `runtime_limits`（Production Runtime V1）：`{"cancel": threading.Event,
+    "deadline_ts": float}`。取消 / 超时以 **RunCancelled / RunDeadlineExceeded**
+    异常从本生成器抛出（节点边界 + LLM/沙箱调用前预检），由调用方（runtime）
+    统一转成 SSE 状态与落库状态。
+    """
     app = build_graph()
     initial = _initial_state(question, files, history, spec, semantic_block, skill_block,
                              run_id=run_id, session_id=session_id,
@@ -846,7 +879,8 @@ def stream_analysis(
                              semantic_packs=semantic_packs,
                              skill_candidates=skill_candidates,
                              context_policy=context_policy,
-                             budget_overrides=budget_overrides)
+                             budget_overrides=budget_overrides,
+                             runtime_limits=runtime_limits)
     merged: dict = dict(initial)
     for update in app.stream(initial, stream_mode="updates"):
         for node, delta in update.items():

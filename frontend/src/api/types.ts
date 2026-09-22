@@ -367,6 +367,21 @@ export interface RunTrace {
     failed: string[];
   };
   final_status: string;
+  /** Production Runtime V1 运行时段：排队 / 容器复用 / 取消与超时归因 */
+  runtime?: {
+    queue_wait_ms?: number;
+    sandbox_acquire_ms?: number | null;
+    sandbox_mode?: string;
+    container_reused?: boolean | null;
+    container_created?: boolean | null;
+    container_uses?: number | null;
+    execution_ms?: number;
+    total_runtime_ms?: number | null;
+    queue_length_at_acquire?: number | null;
+    concurrency_limit?: number;
+    timeout_type?: string;
+    cancellation_reason?: string;
+  };
 }
 
 /** SSE 事件 */
@@ -397,4 +412,7 @@ export interface StreamingState {
   answer?: string;
   followups: string[];
   error?: string;
+  /** Production Runtime V1 生命周期阶段 */
+  phase?: string;
+  phaseReason?: string;
 }

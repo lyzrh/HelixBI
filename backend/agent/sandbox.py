@@ -74,7 +74,7 @@ class SandboxResult:
 
     def __init__(self, ok: bool, stdout: str, stderr: str, out_dir: pathlib.Path,
                  exit_code: int | None = None, timed_out: bool = False,
-                 failure_kind: str = ""):
+                 failure_kind: str = "", pool_meta: dict | None = None):
         self.ok = ok
         self.stdout = stdout
         self.stderr = stderr
@@ -82,6 +82,8 @@ class SandboxResult:
         self.exit_code = exit_code
         self.timed_out = timed_out
         self.failure_kind = failure_kind
+        # Production Runtime V1：来自哪个池、容器是否复用（写进 trace.runtime）
+        self.pool_meta = pool_meta or {}
         self.result = self._read_result()
 
     def _read_result(self) -> dict:
@@ -106,8 +108,53 @@ class SandboxResult:
         return self.result.get("text", "")
 
 
-def run_in_sandbox(run_id: str, code: str, files: dict[str, str]) -> SandboxResult:
-    """files: display-name -> host source path; they are copied into the run dir."""
+def run_in_sandbox(run_id: str, code: str, files: dict[str, str],
+                   runtime_limits: dict | None = None) -> SandboxResult:
+    """沙箱执行入口：warm pool 优先，降级为临时冷容器。
+
+    降级阶梯（每一级失败都落到下一级，绝不阻塞主流程）：
+    1. warm pool 可用 → 借容器执行（复用，无冷启动）；
+    2. 池忙 / 排队超时 / 池未就绪 → `docker run --rm` 冷启动（行为与改造前一致）；
+    3. Docker 不可用 → 结构化 `sandbox_unavailable` 失败（Self-Repair 直接兜底，
+       不浪费重试额度）。
+
+    `runtime_limits`：`{"cancel": Event, "deadline_ts": float}`（Production
+    Runtime V1）。取消在**启动执行前**检查；执行中的取消由执行超时兜底
+    （granularity 说明见 runerrors.py 模块注释）。
+    """
+    from backend.agent.runerrors import RunCancelled, RunDeadlineExceeded, check_runtime_limits
+
+    check_runtime_limits(runtime_limits)
+
+    from backend.agent import sandbox_pool
+
+    pool = sandbox_pool.get_pool()
+    if pool.size > 0:
+        try:
+            with pool.lease() as lease:
+                result = lease.execute(code, files,
+                                       cancel_event=(runtime_limits or {}).get("cancel"))
+                # 产物搬回正式目录 runs/<run_id>/out —— 图表 URL / 产物下发链路不变
+                result.out_dir = lease.publish_to(RUNS_DIR / run_id)
+                result.result = result._read_result()
+                return result
+        except (sandbox_pool.PoolUnavailable, sandbox_pool.PoolTimeout):
+            pass  # 明确降级：冷启动路径兜底
+        except RunCancelled:
+            raise
+
+    return _run_cold(run_id, code, files, runtime_limits)
+
+
+def _run_cold(run_id: str, code: str, files: dict[str, str],
+              runtime_limits: dict | None = None) -> SandboxResult:
+    """改造前的冷启动路径（`docker run --rm`），也是 pool 的降级兜底。"""
+    from backend.agent.runerrors import RunCancelled
+
+    cancel = (runtime_limits or {}).get("cancel")
+    if cancel is not None and cancel.is_set():
+        raise RunCancelled()
+
     run_dir = RUNS_DIR / run_id
     data_dir = run_dir / "data"
     out_dir = run_dir / "out"

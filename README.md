@@ -73,6 +73,8 @@ can always connect your own data.
 | **Reliability** | Network-isolated sandbox + CPU / memory limits + read-only data; `dahelper` JSON contract for returning results; SQLite metadata store in WAL mode; authorization enforced three times: API layer, runtime entry, before tool execution |
 | **Security boundary** | Artifacts / uploads / caches are served only through **authenticated routes** (no anonymous static mounts; path-traversal protection and workspace ownership lookup); database passwords are **encrypted at rest** (key from env only — a missing key refuses the save instead of writing plaintext); exports are filtered by workspace; full write-up in [docs/security.md](docs/security.md) |
 | **Evaluation** | 65 fixed questions (retail / manufacturing / colloquial adversarial cases) + **12 self-repair failure scenarios** + a **cost / latency benchmark** (before vs after: calls / prompt tokens / deterministic latency / budget behaviour) (syntax / missing column / type / empty result / timeout / OOM / repeated error / multi-error / budget exhausted / acceptance-not-passed / sandbox unavailable / replay never repairs) + staged metric reports (semantic resolution / context injection / skill matching / replay admission / self-repair); metric thresholds wired into pytest as CI gates |
+| **Runtime (Production Runtime V1)** | **Warm sandbox pool**: pre-warmed containers with identical security limits, reused via `docker exec`, work directories cleaned on return, hard-capped lifetimes, crashed containers replaced, and automatic fallback to cold containers when the pool is busy; **concurrency control**: global + per-user caps with a bounded wait queue (explicit rejection beyond it); **timeout / cancellation**: queue / container / execution / **whole-run** timeouts plus client-disconnect cancellation (self-repair cannot exceed the run deadline); `Run.trace.runtime` answers "why is this slow: queueing / waiting for a container / executing" and "was this container reused" |
+| **Runtime (Production Runtime V1)** | **Warm sandbox pool**: pre-warmed containers with identical security limits, reused via `docker exec`, work directories cleaned on return, hard-capped lifetimes, crashed containers replaced, and automatic fallback to cold containers when the pool is busy; **concurrency control**: global + per-user caps with a bounded wait queue (explicit rejection beyond it); **timeout / cancellation**: queue / container / execution / **whole-run** timeouts plus client-disconnect cancellation (self-repair cannot exceed the run deadline); `Run.trace.runtime` answers "why is this slow: queueing / waiting for a container / executing" and "was this container reused" |
 | **Cost & latency** | Cost-aware routing: deterministic intent fast path (skips the LLM parse when the resolver is certain) + skill replay (0 calls) + deterministic follow-up suggestions + a context assembler (narrow the semantic layer to the metrics actually referenced, cap few-shot, de-duplicate) + a per-run budget (call / token / cost caps that stop early and say why) + deterministic caches (invalidated by file fingerprint / skill version); `Run.trace.cost_control` and `performance` account for every block, so **"why 2 LLM calls?", "where did the tokens go?", "which stage is slowest?" are answered by data** |
 | **Observability** | Every analysis run persists a `Run.trace`: per-stage latency, LLM calls & tokens, **cost-control profile (call attribution / budget utilisation / termination reason / intent & follow-up source)**, **performance profile (stage latency / bottleneck / cache hits / prompt block accounting)**, **skill-retrieval profile (8-signal candidate scores / chosen candidate / admission verdict / rejection & fallback reasons)**, **self-repair profile (first-pass success / attempts / error category & strategy per round / final success\|exhausted\|fallback)**, the six result-acceptance checks, and **the acting user / workspace / role** — all visible in the run-timeline panel; a replay run's `LLM calls == 0` is data, not a claim |
 
@@ -207,6 +209,10 @@ Result -> Trade-offs), per-block token breakdown, real trace samples and remaini
 
 ## Evaluation
 
+`python -m backend.evaluation --runtime-benchmark` prints the cold-vs-warm-pool comparison
+(startup latency / queueing / e2e p50-p95 / throughput / reuse rate / leak check; offline simulation).
+`python -m backend.evaluation --runtime-benchmark` prints the cold-vs-warm-pool comparison
+(startup latency / queueing / e2e p50-p95 / throughput / reuse rate / leak check; offline simulation).
 `python -m backend.evaluation --cost-benchmark` prints the cost / latency comparison
 (before vs after: calls / prompt tokens / deterministic latency / budget behaviour;
 runs fully offline and is explicitly **not a measurement**).
@@ -255,6 +261,16 @@ Cost & Latency V1 (offline: stubbed LLM/sandbox; call counts and prompt tokens A
   Intent fast-path hit rate            81.5%                        coverage 81.5% / strict accuracy 100.0%
   Follow-up zero-LLM rate              100.0%                       baseline 0.0%
   Replay zero-LLM assertions           6/6 pass                     replay = 0 calls / 0 tokens
+Runtime V1: cold vs warm pool (offline sim: real pool/concurrency code, modeled container time)
+  Single-concurrency e2e p50           101 ms                       cold 1600 ms / 15.9x
+  20-concurrency e2e p50               454 ms                       cold 4000 ms / 7.9x
+  Container reuse / recycle / replace  61                           recycle 1 / replace 0 / leak check PASS
+  └ Real Docker measurements           not collected                needs a Docker daemon
+Runtime V1: cold vs warm pool (offline sim: real pool/concurrency code, modeled container time)
+  Single-concurrency e2e p50           101 ms                       cold 1600 ms / 15.9x
+  20-concurrency e2e p50               454 ms                       cold 4000 ms / 7.9x
+  Container reuse / recycle / replace  61                           recycle 1 / replace 0 / leak check PASS
+  └ Real Docker measurements           not collected                needs a Docker daemon
 Execution / self-repair / end-to-end    needs the Docker sandbox; "not collected"
                                         when unavailable
 ```

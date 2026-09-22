@@ -18,7 +18,7 @@ from backend.auth.context import UserContext
 from backend.auth.deps import get_current_context, require_permission
 from backend.db import get_db
 from backend.models import Run, Session as DbSession, Skill
-from backend.routers.analysis import _semaphore, sse_stream
+from backend.routers.analysis import sse_stream
 from backend.schemas import SkillCreate, SkillFromRun, SkillPatch, SkillRunBody
 from backend.skills import engine as skill_engine
 from backend.skills import retrieval
@@ -130,14 +130,18 @@ async def run_skill(skid: int, body: SkillRunBody, db: Session = Depends(get_db)
     if not retrieval.skill_visible(s, _ctx.workspace_id, _ctx.user_id):
         raise HTTPException(403, "Skill 不属于当前工作区")
 
-    if _semaphore.locked():
-        raise HTTPException(429, "已有分析任务在执行中，请稍候再试")
-    await _semaphore.acquire()
+    def work_factory(slot):
+        runtime_meta = {"queue_wait_ms": slot.queue_wait_s * 1000,
+                        "cancel": slot.cancel_event,
+                        "deadline_ts": slot.deadline_ts}
 
-    def work(on_event):
-        return skill_engine.run_skill(
-            skid, body.session_id, body.data_source_ids, on_event,
-            workspace_id=_ctx.workspace_id,
-        )
+        def work(on_event):
+            return skill_engine.run_skill(
+                skid, body.session_id, body.data_source_ids, on_event,
+                workspace_id=_ctx.workspace_id,
+                runtime_meta=runtime_meta,
+            )
 
-    return await sse_stream(work)
+        return work
+
+    return await sse_stream(work_factory, _ctx)
